@@ -107,11 +107,11 @@ class FullDownloader(
         report()
         if (work.skipped.get() > 0) Timber.w("Full download skipped ${work.skipped.get()} files the game will stream instead")
 
-        onProgress(InstallProgress(InstallProgress.Phase.FINALIZING, work.totalBytes, work.totalBytes, null, detail = "Writing the game's index files"))
+        onProgress(InstallProgress(InstallProgress.Phase.FINALIZING, work.totalBytes, work.totalBytes, null, detail = "게임 인덱스 파일 쓰는 중"))
         val live = File(data, "data")
         builder.finish(LocalStorage.highestIndexVersion(live) + 1)
         while (gameRunning()) {
-            onProgress(InstallProgress(InstallProgress.Phase.FINALIZING, work.totalBytes, work.totalBytes, null, detail = "Waiting for the game to close"))
+            onProgress(InstallProgress(InstallProgress.Phase.FINALIZING, work.totalBytes, work.totalBytes, null, detail = "게임 종료 대기 중"))
             delay(gamePollMs)
         }
         swap(data)
@@ -196,7 +196,7 @@ class FullDownloader(
             if (n > 0) {
                 left -= n
             } else if (input.read() < 0) {
-                throw EOFException("Download ended early")
+                throw EOFException("다운로드가 일찍 끝났습니다")
             } else {
                 left--
             }

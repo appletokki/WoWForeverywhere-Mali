@@ -121,7 +121,7 @@ private fun Header(launcher: LauncherController) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             GameIconImage(launcher.version.icon, 34.dp) { Box(Modifier.size(34.dp)) }
-            Text("Foreverywhere", style = Fw.Title.copy(fontSize = 21.sp), maxLines = 1, softWrap = false)
+            Text("Foreverywhere · Mali", style = Fw.Title.copy(fontSize = 21.sp), maxLines = 1, softWrap = false)
             if (launcher.version.isExperimental) {
                 Text(launcher.version.displayName, style = Fw.Data, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 Text(stringResource(R.string.fw_experimental), style = Fw.Data.copy(color = Fw.Warn), modifier = Modifier.background(Fw.Stone, Fw.Pill).padding(horizontal = 10.dp, vertical = 4.dp))

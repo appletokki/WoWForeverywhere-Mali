@@ -185,7 +185,7 @@ class InstallService : Service() {
             } catch (e: Exception) {
                 if (current.stopped) return@launch
                 Timber.e(e, "Install failed")
-                InstallController.update(InstallUiState.Failed(req, e.message ?: "Install failed"))
+                InstallController.update(InstallUiState.Failed(req, e.message ?: "설치 실패"))
                 finish()
             }
         }
@@ -204,7 +204,7 @@ class InstallService : Service() {
      * and pause. The limit doesn't apply while the app is on screen, which is what Overnight mode is for.
      */
     override fun onTimeout(startId: Int, fgsType: Int) {
-        pause("Android paused the download after several hours in the background. Resume it, and use Overnight mode to keep the app open for long downloads.")
+        pause("Android가 백그라운드에서 몇 시간 뒤 다운로드를 멈췄습니다. 다시 시작하고, 긴 다운로드는 밤샘 모드로 앱을 켜 두세요.")
     }
 
     private fun finish() {
@@ -234,13 +234,13 @@ class InstallService : Service() {
     private fun ensureChannel() {
         val manager = getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(CHANNEL) == null) {
-            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Game downloads", NotificationManager.IMPORTANCE_LOW))
+            manager.createNotificationChannel(NotificationChannel(CHANNEL, "게임 다운로드", NotificationManager.IMPORTANCE_LOW))
         }
     }
 
     private fun placeholderNotification(): Notification {
         ensureChannel()
-        return NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.fw_ic_download).setContentTitle("Game download").build()
+        return NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.fw_ic_download).setContentTitle("게임 다운로드").build()
     }
 
     private fun notification(req: InstallRequest, progress: InstallProgress?): Notification {
@@ -257,14 +257,14 @@ class InstallService : Service() {
         val done = progress?.doneBytes ?: 0
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.fw_ic_download)
-            .setContentTitle(if (req.full) "Downloading all ${req.product.displayName} game data" else "Installing ${req.product.displayName}")
-            .setContentText(progress?.takeIf { total > 0 }?.sizeText ?: "Preparing download…")
+            .setContentTitle(if (req.full) "${req.product.displayName} 전체 게임 데이터 다운로드 중" else "${req.product.displayName} 설치 중")
+            .setContentText(progress?.takeIf { total > 0 }?.sizeText ?: "다운로드 준비 중…")
             .setProgress(1000, if (total > 0) (done * 1000 / total).toInt() else 0, total <= 0)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
-            .addAction(action(ACTION_PAUSE, "Pause"))
-            .addAction(action(ACTION_CANCEL, "Cancel"))
+            .addAction(action(ACTION_PAUSE, "일시정지"))
+            .addAction(action(ACTION_CANCEL, "취소"))
             .build()
     }
 

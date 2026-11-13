@@ -58,6 +58,7 @@ class Cdn(
         var failure: IOException? = null
         var missing = false
         for (host in hosts) {
+            if (host in badTlsHosts && hosts.any { it !in badTlsHosts }) continue
             val request = Request.Builder()
                 .url(url(host, kind, key))
                 .apply { if (range != null) header("Range", "bytes=${range.first}-${range.last}") }
@@ -72,6 +73,7 @@ class Cdn(
                 }
                 response.close()
             } catch (e: IOException) {
+                if (e is javax.net.ssl.SSLException) badTlsHosts.add(host)
                 failure = e
             }
         }
@@ -106,6 +108,7 @@ class Cdn(
         var failure: IOException? = null
         var missing = false
         for (host in hosts) {
+            if (host in badTlsHosts && hosts.any { it !in badTlsHosts }) continue
             val request = Request.Builder()
                 .url(url(host, kind, key))
                 .apply { if (range != null) header("Range", "bytes=${range.first}-${range.last}") }
@@ -120,6 +123,7 @@ class Cdn(
                     }
                 }
             } catch (e: IOException) {
+                if (e is javax.net.ssl.SSLException) badTlsHosts.add(host)
                 failure = e
             }
         }
@@ -131,6 +135,9 @@ class Cdn(
     private fun answered(response: Response, range: LongRange?) = if (range != null) response.code == 206 else response.isSuccessful
 
     companion object {
+        /** Hosts whose TLS handshake failed (e.g. Korea's blizzard.gcdn.cloudn.co.kr, self-signed and expired): skipped while another host is left. */
+        private val badTlsHosts: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
         /** Level 3 serves HTTPS under its own host name; Blizzard's other CDN hosts serve both on one name. */
         fun sslHost(host: String) = if (host.equals("level3.blizzard.com", ignoreCase = true)) "level3.ssl.blizzard.com" else host
 

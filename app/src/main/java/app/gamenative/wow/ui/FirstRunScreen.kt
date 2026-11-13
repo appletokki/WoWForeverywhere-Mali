@@ -147,11 +147,12 @@ private fun Welcome(version: GameVersion, onNext: () -> Unit, onOpenSettings: ()
 
 object DeviceCheck {
     fun run(context: Context): List<Pair<String, Boolean>> {
-        val adreno = runCatching { GPUInformation.isAdrenoGPU(context) }.getOrDefault(false)
         val renderer = runCatching { GPUInformation.getRenderer(context) }.getOrNull().orEmpty()
+        val mali = app.gamenative.ui.screen.wow.isMaliGpu(renderer, Build.HARDWARE)
+        val adreno = renderer.contains("adreno", ignoreCase = true) || mali
         val is64 = Build.SUPPORTED_64_BIT_ABIS.contains("arm64-v8a")
         return listOf(
-            (if (adreno) "Adreno GPU ($renderer)" else context.getString(R.string.fw_device_incompatible_gpu)) to adreno,
+            (if (mali) "Mali GPU ($renderer), 실험적 지원" else if (adreno) "Adreno GPU ($renderer)" else context.getString(R.string.fw_device_incompatible_gpu)) to adreno,
             context.getString(R.string.fw_64_bit_arm_processor) to is64,
             "Android ${Build.VERSION.RELEASE}" to (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q),
         )

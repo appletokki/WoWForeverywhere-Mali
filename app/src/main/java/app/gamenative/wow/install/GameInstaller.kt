@@ -78,7 +78,7 @@ data class InstallProgress(
 class MissingOnCdnException(path: String) : IOException("Blizzard's CDN is missing $path")
 
 class InsufficientSpaceException(val needed: Long, val available: Long) :
-    IOException("Not enough space: needs ${needed / 1_000_000_000} GB, ${available / 1_000_000_000} GB free")
+    IOException("공간 부족: ${needed / 1_000_000_000}GB 필요, ${available / 1_000_000_000}GB 남음")
 
 /**
  * One file to fetch. [kind] is the CDN folder (`config` or `data`); [key] the CDN key. Client files

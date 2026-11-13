@@ -157,7 +157,7 @@ fun WoWForeverScreen(
                 installOrRequestPermission(apk)
             } catch (e: Exception) {
                 Timber.e(e, "Error downloading app update")
-                errorMessage = "App update download failed: ${e.message}"
+                errorMessage = "앱 업데이트 다운로드 실패: ${e.message}"
                 isDownloadingAppUpdate = false
             }
         }
@@ -203,7 +203,7 @@ fun WoWForeverScreen(
         }
         isLaunching = true
         errorMessage = null
-        statusText = "Preparing components..."
+        statusText = "구성 요소 준비 중..."
 
         launchJob = scope.launch {
             try {
@@ -213,7 +213,7 @@ fun WoWForeverScreen(
                         scope.launch(Dispatchers.Main) { statusText = msg }
                     }
                 }
-                statusText = "Booting into World of Warcraft..."
+                statusText = "World of Warcraft 시작 중..."
                 onLaunch(containerId)
             } catch (e: CancellationException) {
                 throw e
@@ -223,8 +223,8 @@ fun WoWForeverScreen(
                 denyStorageAccess()
             } catch (e: Exception) {
                 Timber.e(e, "Error launching WoW Forever")
-                errorMessage = e.message ?: "Launch failed"
-                statusText = "Launch failed"
+                errorMessage = e.message ?: "실행 실패"
+                statusText = "실행 실패"
                 isLaunching = false
             }
         }
@@ -295,7 +295,7 @@ fun WoWForeverScreen(
             return
         }
         isUpdating = true
-        updateStatusText = "Connecting to Blizzard CDN..."
+        updateStatusText = "Blizzard CDN에 연결 중..."
         errorMessage = null
         scope.launch {
             try {
@@ -311,7 +311,7 @@ fun WoWForeverScreen(
             } catch (e: Exception) {
                 Timber.e(e, "Error updating game")
                 if (e.isPermissionDenied()) denyStorageAccess()
-                errorMessage = "Update failed: ${e.message}"
+                errorMessage = "업데이트 실패: ${e.message}"
                 isUpdating = false
             }
         }
@@ -899,7 +899,11 @@ internal data class GpuProfile(
     val edition: String,
     /** MB of video memory the game is told it has; 0 leaves it to the driver. */
     val maxDeviceMemory: Int = 0,
+    /** "Wrapper" (bundled Turnip, Adreno) or "Wrapper-gamenative" (GameNative's wrapper over the system driver). */
+    val graphicsDriver: String = "Wrapper",
 ) {
+    val isMali get() = graphicsDriver == MALI_GRAPHICS_DRIVER
+
     companion object {
         val ADRENO_740 = GpuProfile(DEFAULT_DRIVER, "noconform", "1920x1080", "Adreno 740", "Snapdragon 8 Series / Adreno 740")
         val ADRENO_8XX = GpuProfile(ADRENO_8XX_DRIVER, "noconform,sysmem", "1280x720", "Adreno 8xx", "Snapdragon 8 Elite / Adreno 8xx")
@@ -910,11 +914,23 @@ internal data class GpuProfile(
          */
         val QUEST = GpuProfile("System", "", "1280x720", "Meta Quest 3", "Meta Quest 3 / XR2 Gen 2", maxDeviceMemory = 1536)
 
+        /**
+         * MediaTek Dimensity / Mali: Turnip is Adreno-only, so this runs on the device's own Vulkan driver through
+         * GameNative's wrapper. Tested on a Galaxy Tab S10 Ultra (Dimensity 9300+, Mali-G720): BCn textures are
+         * decoded on the CPU and the wrapper's OpConstantComposite SPIR-V patch is off, because either one makes
+         * vkCreateShaderModule fail on Mali and WoW quits right after creating its device. 720p to start.
+         */
+        val MALI = GpuProfile("System", "", "1280x720", "Mali", "MediaTek Dimensity / Mali (실험적)", graphicsDriver = MALI_GRAPHICS_DRIVER)
+
         fun detect(context: Context) = when {
+            isMaliDevice(context) -> MALI
             isMetaQuest3(Build.MANUFACTURER, Build.MODEL, if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Build.SOC_MODEL else "") -> QUEST
             isAdreno8xxDevice(context) -> ADRENO_8XX
             else -> ADRENO_740
         }
+
+        private fun isMaliDevice(context: Context): Boolean =
+            isMaliGpu(runCatching { GPUInformation.getRenderer(context) }.getOrNull().orEmpty(), Build.HARDWARE)
 
         private fun isAdreno8xxDevice(context: Context): Boolean = isAdreno8xx(
             runCatching { GPUInformation.getRenderer(context) }.getOrNull().orEmpty(),
@@ -929,9 +945,26 @@ internal data class GpuProfile(
  * non-16:9 screens (e.g. a foldable's near-square inner display) instead of being letterboxed.
  * The pixel count stays the same as [baseSize], so GPU cost matches the 16:9 default.
  */
-internal fun graphicsDriverConfig(gpu: GpuProfile): String =
+internal fun graphicsDriverConfig(gpu: GpuProfile): String = if (gpu.isMali) {
+    "version=System,adrenotoolsTurnip=0,resourceType=auto,bcnEmulation=auto,bcnEmulationType=software,bcnEmulationCache=1,quality=high"
+} else {
     "version=${gpu.driver},adrenotoolsTurnip=1,resourceType=buffer,bcnEmulation=auto,quality=high" +
         (if (gpu.maxDeviceMemory > 0) ",maxDeviceMemory=${gpu.maxDeviceMemory}" else "")
+}
+
+private const val MALI_GRAPHICS_DRIVER = "Wrapper-gamenative"
+
+/** A Mali GPU by its GL renderer name, or a MediaTek board ("mt6989") when the renderer can't be read. */
+internal fun isMaliGpu(renderer: String, hardware: String): Boolean =
+    renderer.contains("mali", ignoreCase = true) ||
+        (renderer.isBlank() && hardware.startsWith("mt", ignoreCase = true))
+
+/** GPUs the game's graphics stack runs on: Adreno through Turnip, Mali through the system driver. */
+internal fun isSupportedGpu(context: Context): Boolean {
+    val renderer = runCatching { GPUInformation.getRenderer(context) }.getOrNull().orEmpty()
+    return renderer.contains("adreno", ignoreCase = true) || isMaliGpu(renderer, Build.HARDWARE) ||
+        renderer.isBlank() // unknown: don't block
+}
 
 /**
  * Any Adreno 8xx GPU: the renderer says "Adreno (TM) 8xx", or the chip is one of the Snapdragon 8xx-GPU
@@ -1009,25 +1042,25 @@ internal fun prepareLaunch(
         }
     }
 
-    onStatus("Configuring ${gpu.label} container...")
+    onStatus("${gpu.label} 컨테이너 설정 중...")
     val containerManager = ContainerManager(context)
     val config = containerConfig(gameRoot, product, gpu, screenSize)
     val container = containerManager.getContainerById(CONTAINER_ID)
     if (container == null) {
-        onStatus("Creating prefix environment (first boot)...")
+        onStatus("실행 환경 만드는 중 (첫 실행)...")
         containerManager.createContainer(CONTAINER_ID, config)
     } else {
         container.loadData(config)
         container.saveData()
     }
-    check(containerManager.hasContainer(CONTAINER_ID)) { "Container creation failed. Check system storage and logs." }
+    check(containerManager.hasContainer(CONTAINER_ID)) { "컨테이너를 만들지 못했습니다. 저장 공간과 로그를 확인하세요." }
     // Frame generation follows Settings; the in-game menu's own LSFG choices stay in the container.
     containerManager.getContainerById(CONTAINER_ID)?.apply {
         // A Lossless.dll without the shaders would make the frame-generation layer close the game, so it's left out.
         val frameGeneration = FrameGeneration.isArmed(context) && (FrameGeneration.hasShaders(context) || run {
             Timber.w("Frame generation skipped: Lossless.dll is missing its shaders")
             app.gamenative.ui.util.SnackbarManager.show(
-                "Frame generation is off for this session: your Lossless.dll doesn't have the shaders it needs. Choose another in Settings.",
+                "이번 실행에서는 프레임 생성이 꺼집니다: Lossless.dll에 필요한 셰이더가 없습니다. 설정에서 다른 파일을 고르세요.",
             )
             false
         }) && (!FrameGeneration.sitsOutAfterRebuildCrash(context, File(gameRoot, "${product.flavorDir}/Logs/gx.log")) || run {
@@ -1045,14 +1078,15 @@ internal fun prepareLaunch(
 }
 
 private fun containerConfig(gameRoot: File, product: WowProduct, gpu: GpuProfile, screenSize: String): JSONObject {
-    val samsungEnv = if (Build.MANUFACTURER.equals("samsung", ignoreCase = true)) " FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1" else ""
-    val envVars = "WRAPPER_MAX_IMAGE_COUNT=0 ZINK_DESCRIPTORS=lazy ZINK_DEBUG=compact,deck_emu MESA_SHADER_CACHE_DISABLE=false MESA_SHADER_CACHE_MAX_SIZE=512MB mesa_glthread=true WINEESYNC=0 MESA_VK_WSI_PRESENT_MODE=mailbox${if (gpu.tuDebug.isNotEmpty()) " TU_DEBUG=${gpu.tuDebug}" else ""} VKD3D_SHADER_MODEL=6_0 PULSE_LATENCY_MSEC=144$samsungEnv"
+    // The UBWC hint is a Turnip setting. On Mali the wrapper's OpConstantComposite patch breaks shader creation.
+    val samsungEnv = if (!gpu.isMali && Build.MANUFACTURER.equals("samsung", ignoreCase = true)) " FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1" else ""
+    val envVars = "WRAPPER_MAX_IMAGE_COUNT=0 ZINK_DESCRIPTORS=lazy ZINK_DEBUG=compact,deck_emu MESA_SHADER_CACHE_DISABLE=false MESA_SHADER_CACHE_MAX_SIZE=512MB mesa_glthread=true WINEESYNC=0 MESA_VK_WSI_PRESENT_MODE=mailbox${if (gpu.tuDebug.isNotEmpty()) " TU_DEBUG=${gpu.tuDebug}" else ""} VKD3D_SHADER_MODEL=6_0 PULSE_LATENCY_MSEC=144$samsungEnv${if (gpu.isMali) " WRAPPER_NO_PATCH_OPCONSTCOMP=1" else ""}"
     return JSONObject().apply {
         put("id", CONTAINER_ID)
         put("name", "WoW Forever")
         put("screenSize", screenSize)
         put("envVars", envVars)
-        put("graphicsDriver", "Wrapper")
+        put("graphicsDriver", gpu.graphicsDriver)
         put("graphicsDriverVersion", gpu.driver)
         put("graphicsDriverConfig", graphicsDriverConfig(gpu))
         put("displayRenderer", "vulkan")
@@ -1266,8 +1300,8 @@ private fun installBundledComponents(context: Context, onStatus: (String) -> Uni
 
     val protonDir = File(ImageFs.getSharedProtonDir(context), PROTON_VERSION)
     if (!File(protonDir, "profile.json").exists() || !File(protonDir, "bin/wine").exists()) {
-        onStatus("Extracting Proton 11 ARM64EC (takes ~10s)...")
-        check(extractBundledWcp(context, "$PROTON_VERSION.wcp", protonDir)) { "Failed to extract Proton or graphics components." }
+        onStatus("Proton 11 ARM64EC 압축 해제 중 (약 10초)...")
+        check(extractBundledWcp(context, "$PROTON_VERSION.wcp", protonDir)) { "Proton 또는 그래픽 구성 요소를 풀지 못했습니다." }
         File(protonDir, "bin").listFiles()?.forEach {
             it.setExecutable(true, false)
             it.setReadable(true, false)
@@ -1276,7 +1310,7 @@ private fun installBundledComponents(context: Context, onStatus: (String) -> Uni
 
     val dxvkDir = File(ContentsManager.getContentTypeDir(context, ContentProfile.ContentType.CONTENT_TYPE_DXVK), DXVK_VERSION)
     if (!File(dxvkDir, "profile.json").exists()) {
-        onStatus("Extracting DXVK ARM64...")
+        onStatus("DXVK ARM64 압축 해제 중...")
         if (!extractBundledWcp(context, "dxvk-$DXVK_VERSION.wcp", dxvkDir)) Timber.e("Failed to extract DXVK")
     }
 
@@ -1287,7 +1321,7 @@ private fun installBundledComponents(context: Context, onStatus: (String) -> Uni
 private fun installDriver(context: Context, driverName: String, assetZip: String, onStatus: (String) -> Unit) {
     val driverDir = File(context.filesDir, "contents/adrenotools/$driverName")
     if (File(driverDir, "meta.json").exists()) return
-    onStatus("Installing $driverName driver...")
+    onStatus("$driverName 드라이버 설치 중...")
     driverDir.mkdirs()
     if (!FileUtils.extractZipFromAssets(context, "bundled_components/$assetZip", driverDir)) {
         Timber.e("Error extracting driver $driverName from $assetZip")
