@@ -114,16 +114,16 @@ jobs:
           APK=dist/WoW-Foreverywhere-${TAG#v}-mali.apk
           mkdir -p dist
           cp app/build/outputs/apk/modern/release/app-modern-release.apk "$APK"
-          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$APK" | grep -i "SHA-256" | head -1
-          if gh release view "$TAG-mali" > /dev/null 2>&1; then
-            gh release upload "$TAG-mali" "$APK" --clobber
+          "$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)" verify --print-certs "$APK" | grep -i "SHA-256" | head -1
+          if gh release view "$TAG-mali" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG-mali" --repo "$GITHUB_REPOSITORY" "$APK" --clobber
           else
             {
               echo "WoW Foreverywhere $TAG + Mali(MediaTek Dimensity) GPU 지원 + 한국어 런처."
               echo
               echo "공식 릴리스: https://github.com/YoruDev-Ryland/WoWForeverywhere/releases/tag/$TAG"
             } > dist/notes.md
-            gh release create "$TAG-mali" "$APK" --target main --title "$TAG Mali" --notes-file dist/notes.md --latest
+            gh release create "$TAG-mali" --repo "$GITHUB_REPOSITORY" "$APK" --target main --title "$TAG Mali" --notes-file dist/notes.md --latest
           fi
 
       - name: Remove signing material
@@ -137,5 +137,5 @@ jobs:
         run: |
           TAG=${{ steps.tag.outputs.tag }}
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          gh issue create --title "Mali 자동 빌드 실패: ${TAG:-unknown}" \
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "Mali 자동 빌드 실패: ${TAG:-unknown}" \
             --body "업스트림 ${TAG:-?} 병합 또는 빌드가 실패했습니다. 병합 충돌이면 직접 해결해야 합니다. 실행 로그: $RUN_URL"
