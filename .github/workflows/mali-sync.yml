@@ -1,0 +1,141 @@
+name: Mali sync and release
+
+# Checks YoruDev-Ryland/WoWForeverywhere for a new release tag every day. When one appears, merges it
+# into main (which carries the Mali support and the Korean launcher), builds the APK and publishes it
+# as release <tag>-mali. A merge conflict or a failed build opens an issue instead.
+on:
+  schedule:
+    - cron: "23 21 * * *" # 06:23 KST
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild and re-upload even if the -mali release already exists"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: mali-sync
+
+env:
+  UPSTREAM: https://github.com/YoruDev-Ryland/WoWForeverywhere.git
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Find the latest upstream release
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git remote add upstream "$UPSTREAM"
+          git fetch --quiet --tags upstream main
+          TAG=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG-mali" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 && [ "${{ inputs.force }}" != "true" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "$TAG-mali is already released."
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Building $TAG-mali."
+          fi
+
+      - name: Merge the upstream release
+        if: steps.tag.outputs.build == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898499+github-actions[bot]@users.noreply.github.com"
+          TAG=${{ steps.tag.outputs.tag }}
+          if git merge-base --is-ancestor "$TAG" HEAD; then
+            echo "main already contains $TAG"
+          else
+            git merge --no-edit -m "Merge upstream $TAG" "$TAG"
+            git push origin HEAD:main
+          fi
+
+      - uses: actions/setup-java@v4
+        if: steps.tag.outputs.build == 'true'
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.tag.outputs.build == 'true'
+
+      - name: Install the NDK
+        if: steps.tag.outputs.build == 'true'
+        run: |
+          NDK=$(sed -n 's/.*ndkVersion = "\(.*\)".*/\1/p' app/build.gradle.kts)
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK" > /dev/null
+
+      - name: Fetch runtime components
+        if: steps.tag.outputs.build == 'true'
+        run: tools/fetch_components.sh
+
+      - name: Configure signing
+        if: steps.tag.outputs.build == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MALI_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::MALI_KEYSTORE_BASE64 is not set: the APK would not install over the existing app."
+            exit 1
+          fi
+          mkdir -p app/keystores
+          echo "$KEYSTORE_BASE64" | base64 -d > app/keystores/mali.jks
+          {
+            echo "storeFile=keystores/mali.jks"
+            echo "storePassword=android"
+            echo "keyAlias=androiddebugkey"
+            echo "keyPassword=android"
+          } > app/keystores/keystore.properties
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      - name: Build
+        if: steps.tag.outputs.build == 'true'
+        run: ./gradlew --no-daemon assembleModernRelease -Dorg.gradle.jvmargs="-Xmx5g -Dfile.encoding=UTF-8" -Dkotlin.daemon.jvm.options=-Xmx2g
+
+      - name: Publish the release
+        if: steps.tag.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=${{ steps.tag.outputs.tag }}
+          APK=dist/WoW-Foreverywhere-${TAG#v}-mali.apk
+          mkdir -p dist
+          cp app/build/outputs/apk/modern/release/app-modern-release.apk "$APK"
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$APK" | grep -i "SHA-256" | head -1
+          if gh release view "$TAG-mali" > /dev/null 2>&1; then
+            gh release upload "$TAG-mali" "$APK" --clobber
+          else
+            {
+              echo "WoW Foreverywhere $TAG + Mali(MediaTek Dimensity) GPU 지원 + 한국어 런처."
+              echo
+              echo "공식 릴리스: https://github.com/YoruDev-Ryland/WoWForeverywhere/releases/tag/$TAG"
+            } > dist/notes.md
+            gh release create "$TAG-mali" "$APK" --target main --title "$TAG Mali" --notes-file dist/notes.md --latest
+          fi
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f app/keystores/mali.jks app/keystores/keystore.properties local.properties
+
+      - name: Report a failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=${{ steps.tag.outputs.tag }}
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh issue create --title "Mali 자동 빌드 실패: ${TAG:-unknown}" \
+            --body "업스트림 ${TAG:-?} 병합 또는 빌드가 실패했습니다. 병합 충돌이면 직접 해결해야 합니다. 실행 로그: $RUN_URL"
