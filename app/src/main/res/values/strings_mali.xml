@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mali build only. Kept out of strings.xml so upstream merges don't conflict with it. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="mali_graphics">Mali graphics</string>
+    <string name="mali_driver_explanation">The Vulkan driver the game runs on. The device\'s own driver is the tested one. Changes apply the next time you press Play; if the game won\'t start or looks wrong, go back to the device\'s own driver.</string>
+    <string name="mali_driver_stock">Device\'s own Mali driver (recommended)</string>
+    <string name="mali_driver_panvk">PanVK (experimental, Mesa)</string>
+    <string name="mali_panvk_explanation">PanVK is an open-source Mali driver from Mesa, by zenithblue-oss/panvk-kbase-android. It decodes BC textures on the GPU instead of the CPU. It is experimental: games can freeze, and some phones with this GPU generation rebooted with it. Back up before trying it. The app downloads it (about 9 MB) from the project\'s GitHub release and checks its checksum.</string>
+    <string name="mali_panvk_download">Download PanVK (experimental)</string>
+    <string name="mali_panvk_downloading">Downloading PanVK… %1$d%%</string>
+    <string name="mali_panvk_failed">Couldn\'t install PanVK: %1$s</string>
+    <string name="mali_panvk_selected_note">Experimental driver selected. If the game closes, freezes or the device restarts, switch back to the device\'s own driver.</string>
+    <string name="mali_tuning">Mali tuning (device\'s own driver)</string>
+    <string name="mali_tuning_explanation">Options for the device\'s own Mali driver, from MaliBridge\'s measurements. They apply the next time you press Play.</string>
+    <string name="mali_low_latency">Lower input lag</string>
+    <string name="mali_low_latency_explanation">The game runs at most one frame ahead of the GPU (DXVK maxFrameLatency 1). Controls respond a frame sooner when the GPU is the limit, for about 1% fps.</string>
+    <string name="mali_light_textures">Light texture conversion</string>
+    <string name="mali_light_textures_explanation">Mali can\'t read the game\'s BC textures, so they are converted to ASTC. This uses 8×8 blocks instead of 4×4: less memory and faster loading, but blurrier textures.</string>
+</resources>

@@ -1,6 +1,8 @@
 package app.gamenative.ui.screen.wow
 
 import app.gamenative.utils.AppUpdater
+import app.gamenative.wow.GraphicsDrivers
+import app.gamenative.wow.MaliPanVk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -16,11 +18,39 @@ class MaliSupportTest {
     }
 
     @Test
-    fun maliProfile_usesSystemDriverThroughWrapper() {
+    fun stockDriver_decodesBcnOnTheCpuIntoAstc4x4() {
+        val config = graphicsDriverConfig(MALI_PROFILE)
         assertTrue(MALI_PROFILE.isMali)
-        assertEquals(MALI_GRAPHICS_DRIVER_CONFIG, graphicsDriverConfig(MALI_PROFILE))
+        assertTrue(config.startsWith("version=System,"))
+        assertTrue("bcnEmulationType=software" in config)
+        assertTrue(config.endsWith("quality=high"))
         assertFalse(GpuProfile.ADRENO_740.isMali)
         assertTrue(graphicsDriverConfig(GpuProfile.ADRENO_740).startsWith("version=${GpuProfile.ADRENO_740.driver},"))
+    }
+
+    @Test
+    fun lightTextures_useAstc8x8() {
+        val light = MALI_PROFILE.copy(maliOptions = MaliOptions(lightTextures = true))
+        assertTrue(graphicsDriverConfig(light).endsWith("quality=low"))
+    }
+
+    @Test
+    fun panvk_isLoadedThroughAdrenotoolsAndDecodesBcnItself() {
+        val panvk = maliLaunchProfile(MALI_PROFILE, MaliPanVk.DRIVER_NAME, MaliOptions())
+        assertTrue(panvk.isMaliAddedDriver)
+        assertEquals(MALI_GRAPHICS_DRIVER, panvk.graphicsDriver)
+        val config = graphicsDriverConfig(panvk)
+        assertTrue(config.startsWith("version=${MaliPanVk.DRIVER_NAME},"))
+        assertTrue("bcnEmulation=none" in config)
+    }
+
+    @Test
+    fun turnipPickedOnMali_fallsBackToStockDriver() {
+        GraphicsDrivers.BUILT_IN.forEach { builtIn ->
+            val profile = maliLaunchProfile(MALI_PROFILE, builtIn, MaliOptions())
+            assertEquals(GraphicsDrivers.SYSTEM, profile.driver)
+            assertFalse(profile.isMaliAddedDriver)
+        }
     }
 
     @Test
@@ -31,10 +61,9 @@ class MaliSupportTest {
     }
 
     @Test
-    fun maliIgnoresDriverPickedInSettings() {
-        val picked = GpuProfile.ADRENO_740.copy(driver = "Turnip-V32-RP6sched")
-        assertEquals(MALI_PROFILE, maliLaunchGpu(MALI_PROFILE) { MALI_PROFILE.copy(driver = "Turnip-V32-RP6sched") })
-        assertEquals(picked, maliLaunchGpu(GpuProfile.ADRENO_740) { picked })
+    fun lowLatency_writesDxvkMaxFrameLatency() {
+        assertEquals("dxgi.maxFrameLatency = 1\n", maliDxvkConf(MaliOptions(lowLatency = true)))
+        assertEquals("", maliDxvkConf(MaliOptions()))
     }
 
     @Test

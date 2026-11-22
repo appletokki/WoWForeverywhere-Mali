@@ -304,7 +304,7 @@ fun SettingsScreen(
                 Text(stringResource(R.string.fw_gpu_profile, launcher.gpu.edition), style = Fw.Data)
             }
             ResolutionSection(launcher)
-            GraphicsDriverSection(launcher)
+            if (launcher.gpu.isMali) MaliGraphicsSection(launcher) else GraphicsDriverSection(launcher) // Mali hook
             FrameGenerationSection()
             TroubleshootingSection(launcher, onOpenControllerTest)
             AddonModeSection(null, onOpenAddonMode, onDisableAddonMode)

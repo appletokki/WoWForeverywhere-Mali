@@ -903,6 +903,8 @@ internal data class GpuProfile(
     val maxDeviceMemory: Int = 0,
     /** "Wrapper" (bundled Turnip, Adreno) or "Wrapper-gamenative" (GameNative's wrapper over the system driver). */
     val graphicsDriver: String = "Wrapper",
+    /** Mali only: the player's Mali options (MaliSupport.kt). */
+    val maliOptions: MaliOptions = MaliOptions(),
 ) {
     val isMali get() = graphicsDriver == MALI_GRAPHICS_DRIVER
 
@@ -950,7 +952,7 @@ internal data class GpuProfile(
  * non-16:9 screens (e.g. a foldable's near-square inner display) instead of being letterboxed.
  * The pixel count stays the same as [baseSize], so GPU cost matches the 16:9 default.
  */
-internal fun graphicsDriverConfig(gpu: GpuProfile): String = if (gpu.isMali) MALI_GRAPHICS_DRIVER_CONFIG else // Mali hook
+internal fun graphicsDriverConfig(gpu: GpuProfile): String = if (gpu.isMali) maliGraphicsDriverConfig(gpu) else // Mali hook
     "version=${gpu.driver},adrenotoolsTurnip=1,resourceType=buffer,bcnEmulation=auto,quality=high" +
         (if (gpu.maxDeviceMemory > 0) ",maxDeviceMemory=${gpu.maxDeviceMemory}" else "")
 
@@ -1052,7 +1054,7 @@ internal fun prepareLaunch(
 
     onStatus("${gpu.label} 컨테이너 설정 중...")
     val containerManager = ContainerManager(context)
-    val launchGpu = maliLaunchGpu(gpu) { app.gamenative.wow.GraphicsDrivers.applyTo(context, gpu) } // Mali hook
+    val launchGpu = maliLaunchGpu(context, gpu) { app.gamenative.wow.GraphicsDrivers.applyTo(context, gpu) } // Mali hook
     Timber.i("Graphics driver: ${launchGpu.driver}${if (launchGpu.driver != gpu.driver) " (picked in Settings)" else ""}")
     val config = containerConfig(gameRoot, product, launchGpu, screenSize)
     val container = containerManager.getContainerById(CONTAINER_ID)
