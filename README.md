@@ -16,10 +16,10 @@ Install the app, let it download the game from Blizzard's servers, pick your add
 </div>
 
 > [!TIP]
-> ### Version 1.0 for WoW Forever's launch
-> Foreverywhere 1.0 lets you choose which WoW account to play when your Battle.net login has more than one. Recent versions added **Download all game data** with **Overnight mode** for slow connections, and **Addon manager mode** for WoW installs you run some other way.
+> ### Can't log in? Version 1.2 adds Battle.net's own sign-in page
+> If the game keeps disconnecting you with **BLZ51914400** ("You have been disconnected"), open **Account**, set **Sign-in method** to **Battle.net sign-in page**, and press **Play**. Battle.net's sign-in page opens, where you can confirm the device or enter a code, and the game then starts signed in, the same way the Battle.net app starts it on a PC. It's new and only for WoW Forever, so if it fails, please open an issue with `_forever_/Logs/BrowserLogin.log` from your game folder.
 >
-> **[Download the latest release](https://github.com/YoruDev-Ryland/WoWForeverywhere/releases/latest)** · [What's new in 1.0.0](https://github.com/YoruDev-Ryland/WoWForeverywhere/releases/tag/v1.0.0)
+> **[Download the latest release](https://github.com/YoruDev-Ryland/WoWForeverywhere/releases/latest)** · [What's new in 1.2.0](https://github.com/YoruDev-Ryland/WoWForeverywhere/releases/tag/v1.2.0)
 
 ## Features
 
@@ -134,7 +134,7 @@ The app needs **All files access** to change addons in another app's folder. Fol
 - **Controls.** Use the D-pad or stick to move and **A** to select. **B** goes back. In the game, your handheld's controller works through WoW's own gamepad mode.
 - **Back to the launcher.** While the game is starting, hold **Start + Select + L2 + R2**, or tap the back arrow, to cancel and return to the home screen.
 - **In-game menu.** Press Back during play to open the sidebar with the on-screen keyboard, the performance overlay and **Exit**.
-- **More than one WoW account.** If your Battle.net login has several, such as WoW1 and WoW2, choose the one to play under **Account → Game account**.
+- **More than one WoW account.** If your Battle.net login has several, such as WoW1 and WoW2, choose the one to play under **Account → Game account**. If yours has its own name, type it there.
 - **Authenticator codes** are still typed in the game. The game keeps running when you switch apps, so you can get a code from an authenticator app on the same device.
 
 ### How your login is stored
@@ -144,7 +144,7 @@ Saving your login is optional, and you can remove it any time under **Account**.
 - The email and password are sealed together with AES-256-GCM using a key held by the Android Keystore. The key can't be exported, and it stays in the device's secure hardware where the device has it.
 - The saved login is excluded from cloud backups and from phone-to-phone transfers.
 - Screenshots and screen recordings of the login form are blocked.
-- To sign in, the game reads your login from a short-lived `login.txt` file in its own folder. This is how the WoW client accepts a login without the Battle.net app. Foreverywhere writes the file when you press Play and wipes it about 20 seconds after the game reads it, or within ten minutes at most (a first start can take several minutes to reach the login screen). It is also wiped when you leave or close the game.
+- To sign in, the game reads your login from a short-lived `login.txt` file in its own folder. This is how the WoW client accepts a login without the Battle.net app. Foreverywhere writes the file when you press Play and wipes it once the login has gone through, or within ten minutes at most (a first start can take several minutes to reach the login screen, and an authenticator code takes a while to type). It is also wiped when you leave or close the game.
 
 Because the game needs the password in plain text for those few seconds, any app with full storage access could read it in that window. If that is a concern, skip saving your login and sign in inside the game instead.
 
@@ -160,6 +160,7 @@ Because the game needs the password in plain text for those few seconds, any app
 - **Clear game data** deletes the world data so the game downloads it again the next time you press **Play**, about 67 GB. Your settings, addons and login stay.
 - **Settings** shows the app version and checks for app updates. It also holds:
   - **Game version** and **Region** (Americas, Europe, Korea or Taiwan).
+  - **Game language**: the language of the game's text and voices. A language the install doesn't have yet is downloaded first.
   - **Addon sources**, showing which addon sites this build can use.
   - **Device**, showing the graphics profile picked for your chip.
   - **Resolution**, which is set for your device by default. A higher resolution looks sharper but is harder on the device.
@@ -195,7 +196,7 @@ These versions are experimental and get little support. They may run poorly or n
 | The keyboard doesn't appear in the game | Force-stop Gboard under **Settings → Apps → Gboard** and open the keyboard again. |
 | The app returns to the home screen after "Starting World of Warcraft" | Check the files in the game's `Errors` folder (`_forever_/Errors` or `_classic_beta_/Errors`). |
 | "This device can't run the game" | The device has no Adreno GPU. The game needs a Snapdragon chip. |
-| *You have been disconnected (BLZ51914400)* right after logging in, often after a CAPTCHA | Blizzard blocks game logins from a network your account hasn't used, such as mobile data or a new Wi-Fi. First turn off any phone setting that sends traffic over Wi-Fi and mobile data together, such as *Optimize network for speed* in **Settings → System → Network**; that fixed it for one player. Otherwise sign in once at [battle.net](https://account.battle.net/) in your browser on the same connection, then start the game again. **Account → Fix a blocked login** walks you through it. |
+| *You have been disconnected (BLZ51914400)* right after logging in, often after a CAPTCHA | Blizzard blocks game logins from a network or device your account hasn't used. The most reliable fix is **Account → Sign-in method → Battle.net sign-in page** (1.2.0 or later), which signs you in through Battle.net's own page instead of your saved password. Otherwise, turn off any phone setting that sends traffic over Wi-Fi and mobile data together, such as *Optimize network for speed* in **Settings → System → Network**; that fixed it for one player. Otherwise sign in once at [battle.net](https://account.battle.net/) in your browser on the same connection, then start the game again. **Account → Fix a blocked login** walks you through it. |
 | *You have been disconnected (BLZ51914500)* | The password didn't match. Re-enter it under **Account → Change login**. |
 | Login error with more than one WoW account on your Battle.net login | Choose the account under **Account → Game account**. Auto-login skips the game's own account picker. |
 | Stuck on "Launching game..." on Android 17 | Update the app to 1.0.1 or later, which fixes a hang at start on Android 17. |

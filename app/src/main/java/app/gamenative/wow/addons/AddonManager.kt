@@ -13,6 +13,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -38,8 +39,8 @@ data class AddonListing(
  * Searches, installs, updates and removes addons in one `Interface/AddOns` folder.
  *
  * Network failures in search and update checks are swallowed per provider, so being offline
- * never blocks anything: results simply come back empty. Install, update and remove are
- * serialized.
+ * never blocks anything: results simply come back empty. Downloads run side by side; unpacking into the folder,
+ * recording and removing are serialized.
  */
 class AddonManager(
     private val addonsDir: File,
@@ -49,6 +50,13 @@ class AddonManager(
     private val target: AddonTarget = AddonTarget.FOREVER,
 ) {
     private val lock = Mutex()
+
+    /** What an install is doing, reported to the caller as it goes. */
+    sealed interface Step {
+        /** [bytes] of the zip so far, out of [total] when the server said. */
+        data class Downloading(val bytes: Long, val total: Long?) : Step
+        data object Unpacking : Step
+    }
 
     suspend fun search(query: String, includeClassic: Boolean = true, category: AddonCategory? = null): List<AddonListing> =
         browse(includeClassic, category) { it.search(query, 0) }
@@ -88,20 +96,37 @@ class AddonManager(
     suspend fun checkUpdates(): List<AddonListing> = installed().filter { it.updateAvailable }
 
     /** Installs [remote]'s best file (Forever first), installing missing required dependencies first. */
-    suspend fun install(remote: RemoteAddon): InstalledAddon = lock.withLock { installLocked(remote, mutableSetOf()) }
+    suspend fun install(remote: RemoteAddon, onStep: (Step) -> Unit = {}): InstalledAddon = installWithDependencies(remote, mutableSetOf(), onStep)
 
-    /** Reinstalls [addon] from its source's newest best file. */
-    suspend fun update(addon: InstalledAddon): InstalledAddon = lock.withLock { updateLocked(addon) }
+    /**
+     * Reinstalls [addon] from its source's newest best file. [known] is the source's listing when the caller already
+     * has it (from [installed]), which saves asking the source again.
+     */
+    suspend fun update(addon: InstalledAddon, known: RemoteAddon? = null, onStep: (Step) -> Unit = {}): InstalledAddon {
+        val source = addon.source ?: throw IOException("${addon.name} has no known source")
+        val remote = known?.takeIf { it.provider == source.provider && it.projectId == source.projectId && it.latest.isNotEmpty() }
+            ?: fetchRemote(addon, source)
+        return install(remote, onStep)
+    }
 
-    /** Updates every addon with an update available; failures are skipped. */
-    suspend fun updateAll(): List<InstalledAddon> = checkUpdates().mapNotNull { listing ->
-        val installed = listing.installed ?: return@mapNotNull null
-        try {
-            update(installed)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            null
+    /** Updates every addon with an update available, up to [parallel] at once; failures are skipped. */
+    suspend fun updateAll(parallel: Int = 3): List<InstalledAddon> {
+        val gate = kotlinx.coroutines.sync.Semaphore(parallel)
+        return coroutineScope {
+            checkUpdates().mapNotNull { listing ->
+                val installed = listing.installed ?: return@mapNotNull null
+                async {
+                    gate.withPermit {
+                        try {
+                            update(installed, listing.remote)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                }
+            }.awaitAll().filterNotNull()
         }
     }
 
@@ -116,18 +141,21 @@ class AddonManager(
     }
 
     /** Installs from a GitHub repository URL or a direct zip URL. */
-    suspend fun installFromUrl(url: String): InstalledAddon = lock.withLock {
+    suspend fun installFromUrl(url: String, onStep: (Step) -> Unit = {}): InstalledAddon {
         val repo = GitHubProvider.fromUrl(url)
         if (repo != null) {
             val github = providers.firstOrNull { it.id == ProviderIds.GITHUB } ?: GitHubProvider(http)
             val remote = github.get(repo) ?: throw IOException("no release found for $repo")
-            return@withLock installLocked(remote, mutableSetOf())
+            return install(remote, onStep)
         }
         val trimmed = url.trim()
         require(trimmed.startsWith("https://", ignoreCase = true) || trimmed.startsWith("http://", ignoreCase = true)) {
             "not a URL: $url"
         }
-        val folders = downloadAndExtract(trimmed)
+        return downloadThenUnpack(trimmed, onStep) { folders -> recordUrl(trimmed, folders) }
+    }
+
+    private fun recordUrl(trimmed: String, folders: List<String>): InstalledAddon {
         val main = folders.firstNotNullOfOrNull { FlavorRules.pickToc(File(addonsDir, it), target) }
         val record = InstalledAddon(
             id = "${ProviderIds.URL}:$trimmed",
@@ -138,19 +166,46 @@ class AddonManager(
             source = SourceRef(ProviderIds.URL, trimmed),
             installedAt = System.currentTimeMillis(),
         )
-        commit(record)
+        return commit(record)
     }
 
     /**
      * Installs the addons in a zip already on the device. They're recorded like addons copied in by hand, from their
      * TOCs, so one whose TOC names its CurseForge or Wago project still gets update checks. A record whose folders
-     * the zip all replaced is dropped first, since it describes the copy that was overwritten.
+     * the zip all replaced is dropped first, since it describes the copy that was overwritten. A zip addon with the
+     * same id as an older record is folded into it, see [mergeSameId].
      */
     suspend fun installFromZip(zip: File): List<InstalledAddon> = lock.withLock {
         val folders = withContext(Dispatchers.IO) { AddonArchive.install(zip, addonsDir) }.toSet()
         val records = db.load()
         db.save(records.filterNot { folders.containsAll(it.folders) })
+        val synced = syncDb()
+        val merged = mergeSameId(synced, folders)
+        if (merged != synced) db.save(merged)
         syncDb().filter { record -> record.folders.any { it in folders } }
+    }
+
+    /**
+     * Two records with one id would show the same addon twice (and crash the Installed list), so a record the zip just
+     * added is folded into an older one with its id. The older record keeps every folder it had: addons such as DBM
+     * ship several folders under one project, and a zip may hold only one of them. The only folders removed are
+     * suffixed copies of a folder the zip brought in ("Foo_Forever" when "Foo" arrived), left by older installs.
+     * When that leaves nothing of the older record outside the zip, the zip's record replaces it.
+     */
+    private fun mergeSameId(records: List<InstalledAddon>, folders: Set<String>): List<InstalledAddon> {
+        val fresh = records.filter { folders.containsAll(it.folders) }
+        val older = (records - fresh.toSet()).associateBy { it.id }
+        val folded = fresh.filter { it.id in older }
+        if (folded.isEmpty()) return records
+        val replacements = folded.groupBy { it.id }.mapValues { (id, news) ->
+            val old = older.getValue(id)
+            val newFolders = news.flatMap { it.folders }.distinct()
+            val stale = old.folders.filter { o -> o !in folders && newFolders.any { AddonArchive.isSuffixedCopy(o, it) } }
+            stale.forEach { deleteFolder(it) }
+            val outside = old.folders.filter { it !in stale && it !in folders }
+            if (outside.isEmpty() && news.size == 1) news.single() else old.copy(folders = (old.folders - stale.toSet() + newFolders).distinct())
+        }
+        return records.filterNot { it in folded }.map { replacements[it.id] ?: it }
     }
 
     // --- browsing -------------------------------------------------------------------------------
@@ -257,15 +312,13 @@ class AddonManager(
 
     // --- installing -----------------------------------------------------------------------------
 
-    private suspend fun updateLocked(addon: InstalledAddon): InstalledAddon {
-        val source = addon.source ?: throw IOException("${addon.name} has no known source")
+    private suspend fun fetchRemote(addon: InstalledAddon, source: SourceRef): RemoteAddon {
         val provider = providers.firstOrNull { it.id == source.provider && it.enabled }
             ?: throw IOException("provider ${source.provider} is not available")
-        val remote = provider.get(source.projectId) ?: throw IOException("${addon.name} no longer exists on ${source.provider}")
-        return installLocked(remote, mutableSetOf())
+        return provider.get(source.projectId) ?: throw IOException("${addon.name} no longer exists on ${source.provider}")
     }
 
-    private suspend fun installLocked(remote: RemoteAddon, visiting: MutableSet<String>): InstalledAddon {
+    private suspend fun installWithDependencies(remote: RemoteAddon, visiting: MutableSet<String>, onStep: (Step) -> Unit): InstalledAddon {
         visiting += "${remote.provider}:${remote.projectId}"
         val (flavor, file) = bestFile(remote) ?: throw IOException("${remote.name} has no compatible file")
         if (!file.installable) throw IOException("${remote.name} can't be downloaded by third-party apps; open ${remote.websiteUrl}")
@@ -273,23 +326,25 @@ class AddonManager(
         for (dep in file.dependencies) {
             val key = "${dep.provider}:${dep.projectId}"
             if (!visiting.add(key)) continue
-            if (syncDb().any { it.source?.provider == dep.provider && it.source.projectId == dep.projectId }) continue
+            if (lock.withLock { syncDb() }.any { it.source?.provider == dep.provider && it.source.projectId == dep.projectId }) continue
             val provider = providers.firstOrNull { it.id == dep.provider && it.enabled } ?: continue
             val depRemote = provider.get(dep.projectId) ?: continue
-            installLocked(depRemote, visiting)
+            installWithDependencies(depRemote, visiting) {}
         }
 
-        val folders = downloadAndExtract(file.downloadUrl)
-        val record = InstalledAddon(
-            id = "${remote.provider}:${remote.projectId}",
-            name = remote.name.trim(),
-            folders = folders,
-            version = file.version,
-            flavor = if (flavor == AddonFlavor.OTHER) classifyFolders(folders) else flavor,
-            source = SourceRef(remote.provider, remote.projectId, file.fileId),
-            installedAt = System.currentTimeMillis(),
-        )
-        return commit(record)
+        return downloadThenUnpack(file.downloadUrl, onStep) { folders ->
+            commit(
+                InstalledAddon(
+                    id = "${remote.provider}:${remote.projectId}",
+                    name = remote.name.trim(),
+                    folders = folders,
+                    version = file.version,
+                    flavor = if (flavor == AddonFlavor.OTHER) classifyFolders(folders) else flavor,
+                    source = SourceRef(remote.provider, remote.projectId, file.fileId),
+                    installedAt = System.currentTimeMillis(),
+                ),
+            )
+        }
     }
 
     /**
@@ -308,18 +363,49 @@ class AddonManager(
         return record
     }
 
-    private suspend fun downloadAndExtract(url: String): List<String> = withContext(Dispatchers.IO) {
+    /**
+     * Downloads [url] (side by side with other downloads), then unpacks it into the folder and records it with [record]
+     * while holding [lock], so two addons never write the folder or the database at once.
+     */
+    private suspend fun downloadThenUnpack(url: String, onStep: (Step) -> Unit, record: (List<String>) -> InstalledAddon): InstalledAddon {
+        val zip = download(url, onStep)
+        try {
+            onStep(Step.Unpacking)
+            return lock.withLock {
+                val folders = withContext(Dispatchers.IO) { AddonArchive.install(zip, addonsDir) }
+                record(folders)
+            }
+        } finally {
+            zip.delete()
+        }
+    }
+
+    private suspend fun download(url: String, onStep: (Step) -> Unit): File = withContext(Dispatchers.IO) {
         val parent = addonsDir.absoluteFile.parentFile ?: addonsDir
         parent.mkdirs()
         val tmp = File(parent, ".foreverywhere-download-${System.nanoTime()}.zip")
         try {
             http.newCall(Request.Builder().url(url).build()).execute().use { response ->
                 if (!response.isSuccessful) throw IOException("download failed: HTTP ${response.code}")
-                tmp.outputStream().use { out -> response.body.byteStream().copyTo(out) }
+                val total = response.body.contentLength().takeIf { it > 0 }
+                onStep(Step.Downloading(0, total))
+                tmp.outputStream().use { out ->
+                    val input = response.body.byteStream()
+                    val buffer = ByteArray(64 * 1024)
+                    var bytes = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        out.write(buffer, 0, read)
+                        bytes += read
+                        onStep(Step.Downloading(bytes, total))
+                    }
+                }
             }
-            AddonArchive.install(tmp, addonsDir)
-        } finally {
+            tmp
+        } catch (e: Throwable) {
             tmp.delete()
+            throw e
         }
     }
 

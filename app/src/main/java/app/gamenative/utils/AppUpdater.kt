@@ -14,7 +14,9 @@ import org.json.JSONObject
 import timber.log.Timber
 
 object AppUpdater {
-    private const val REPO = "YoruDev-Ryland/WoWForeverywhere"
+    // Mali hook: the Mali build updates from its own releases (v1.3.0-mali), signed with its own key. The official
+    // APK would not install over it, and would drop Mali support if it did.
+    private const val REPO = "appletokki/WoWForeverywhere-Mali"
     private const val RELEASES_URL = "https://api.github.com/repos/$REPO/releases/latest"
     private const val APK_NAME = "WoW-Foreverywhere.apk"
     private const val USER_AGENT = "WoW-Foreverywhere"
@@ -116,7 +118,7 @@ object AppUpdater {
             version = tag.trimStart('v', 'V'),
             name = tag,
             notes = fetchReleaseNotes(tag),
-            downloadUrl = "https://github.com/$REPO/releases/download/$tag/$APK_NAME",
+            downloadUrl = "https://github.com/$REPO/releases/download/$tag/WoW-Foreverywhere-${tag.trimStart('v', 'V').removeSuffix("-mali")}-mali.apk", // Mali hook
             sizeBytes = 0L,
         )
     }

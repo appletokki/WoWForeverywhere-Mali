@@ -1,6 +1,7 @@
 package app.gamenative.ui.screen.wow
 
 import android.content.Context
+import app.gamenative.ui.screen.wow.auth.BattleNetBrowserLogin
 import android.os.Build
 import android.os.Environment
 import android.view.WindowManager
@@ -35,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.gamenative.BuildConfig
+import app.gamenative.R
 import app.gamenative.PluviaApp
 import app.gamenative.events.AndroidEvent
 import app.gamenative.ui.screen.wow.WowClientDownloader.BUILD_INFO
@@ -885,8 +887,8 @@ internal class StorageAccessDeniedException(cause: Throwable) : Exception(cause)
 internal fun Throwable.isPermissionDenied() =
     message?.let { "EPERM" in it || "Operation not permitted" in it } == true
 
-private const val DEFAULT_DRIVER = "Turnip-WoW-scheduler-test"
-private const val ADRENO_8XX_DRIVER = "Turnip-V32-RP6sched"
+internal const val DEFAULT_DRIVER = "Turnip-WoW-scheduler-test"
+internal const val ADRENO_8XX_DRIVER = "Turnip-V32-RP6sched"
 
 private const val PROTON_VERSION = "proton-11.0-90624-arm64ec"
 private const val DXVK_VERSION = "2.4.1-wow-aarch64-test"
@@ -915,22 +917,25 @@ internal data class GpuProfile(
         val QUEST = GpuProfile("System", "", "1280x720", "Meta Quest 3", "Meta Quest 3 / XR2 Gen 2", maxDeviceMemory = 1536)
 
         /**
-         * MediaTek Dimensity / Mali: Turnip is Adreno-only, so this runs on the device's own Vulkan driver through
-         * GameNative's wrapper. Tested on a Galaxy Tab S10 Ultra (Dimensity 9300+, Mali-G720): BCn textures are
-         * decoded on the CPU and the wrapper's OpConstantComposite SPIR-V patch is off, because either one makes
-         * vkCreateShaderModule fail on Mali and WoW quits right after creating its device. 720p to start.
+         * Adreno 722 (Retroid Pocket Duo's CQ7790S): the device's own driver ("System"), because the Turnip builds
+         * we ship don't see this GPU at all, so WoW found no usable graphics card (#65).
          */
-        val MALI = GpuProfile("System", "", "1280x720", "Mali", "MediaTek Dimensity / Mali (실험적)", graphicsDriver = MALI_GRAPHICS_DRIVER)
+        val ADRENO_722 = GpuProfile("System", "", "1280x720", "Adreno 722", "Adreno 722")
+
+        /**
+         * Adreno 850 and newer (RedMagic 12 Pro): the device's own driver ("System"). Turnip V32 doesn't know these GPUs,
+         * so WoW said the 3D accelerator isn't supported (#76, #78); the Adreno 840 still runs on V32.
+         */
+        val ADRENO_85X = GpuProfile("System", "", "1280x720", "Adreno 850", "Adreno 850 or newer")
 
         fun detect(context: Context) = when {
-            isMaliDevice(context) -> MALI
+            isMaliDevice(context) -> MALI_PROFILE // Mali hook
             isMetaQuest3(Build.MANUFACTURER, Build.MODEL, if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Build.SOC_MODEL else "") -> QUEST
+            isAdreno85x(runCatching { GPUInformation.getRenderer(context) }.getOrNull().orEmpty()) -> ADRENO_85X
             isAdreno8xxDevice(context) -> ADRENO_8XX
+            isAdreno722(runCatching { GPUInformation.getRenderer(context) }.getOrNull().orEmpty()) -> ADRENO_722
             else -> ADRENO_740
         }
-
-        private fun isMaliDevice(context: Context): Boolean =
-            isMaliGpu(runCatching { GPUInformation.getRenderer(context) }.getOrNull().orEmpty(), Build.HARDWARE)
 
         private fun isAdreno8xxDevice(context: Context): Boolean = isAdreno8xx(
             runCatching { GPUInformation.getRenderer(context) }.getOrNull().orEmpty(),
@@ -945,26 +950,9 @@ internal data class GpuProfile(
  * non-16:9 screens (e.g. a foldable's near-square inner display) instead of being letterboxed.
  * The pixel count stays the same as [baseSize], so GPU cost matches the 16:9 default.
  */
-internal fun graphicsDriverConfig(gpu: GpuProfile): String = if (gpu.isMali) {
-    "version=System,adrenotoolsTurnip=0,resourceType=auto,bcnEmulation=auto,bcnEmulationType=software,bcnEmulationCache=1,quality=high"
-} else {
+internal fun graphicsDriverConfig(gpu: GpuProfile): String = if (gpu.isMali) MALI_GRAPHICS_DRIVER_CONFIG else // Mali hook
     "version=${gpu.driver},adrenotoolsTurnip=1,resourceType=buffer,bcnEmulation=auto,quality=high" +
         (if (gpu.maxDeviceMemory > 0) ",maxDeviceMemory=${gpu.maxDeviceMemory}" else "")
-}
-
-private const val MALI_GRAPHICS_DRIVER = "Wrapper-gamenative"
-
-/** A Mali GPU by its GL renderer name, or a MediaTek board ("mt6989") when the renderer can't be read. */
-internal fun isMaliGpu(renderer: String, hardware: String): Boolean =
-    renderer.contains("mali", ignoreCase = true) ||
-        (renderer.isBlank() && hardware.startsWith("mt", ignoreCase = true))
-
-/** GPUs the game's graphics stack runs on: Adreno through Turnip, Mali through the system driver. */
-internal fun isSupportedGpu(context: Context): Boolean {
-    val renderer = runCatching { GPUInformation.getRenderer(context) }.getOrNull().orEmpty()
-    return renderer.contains("adreno", ignoreCase = true) || isMaliGpu(renderer, Build.HARDWARE) ||
-        renderer.isBlank() // unknown: don't block
-}
 
 /**
  * Any Adreno 8xx GPU: the renderer says "Adreno (TM) 8xx", or the chip is one of the Snapdragon 8xx-GPU
@@ -975,6 +963,18 @@ internal fun isAdreno8xx(renderer: String, socModel: String, hardware: String): 
     Regex("""adreno\D*8\d\d""", RegexOption.IGNORE_CASE).containsMatchIn(renderer) ||
         listOf("SM8735", "SM8750", "SM8845", "SM8850").any { socModel.contains(it, ignoreCase = true) } ||
         hardware.contains("sun", ignoreCase = true)
+
+/** The display socket Wine connects to: TMPDIR (imagefs/usr/tmp) + /.X11-unix/X0. */
+internal fun xSocketPath(imageFsRoot: File) = "${imageFsRoot.path}/usr/tmp/.X11-unix/X0"
+
+/** A Unix socket path has to fit in sun_path: 108 bytes with the closing NUL. */
+internal fun fitsSocketPath(path: String) = path.toByteArray(Charsets.UTF_8).size <= 107
+
+/** An Adreno 850 to 899, from the renderer name ("Adreno (TM) 850"). */
+internal fun isAdreno85x(renderer: String): Boolean = Regex("""adreno\D*8[5-9]\d\b""", RegexOption.IGNORE_CASE).containsMatchIn(renderer)
+
+/** An Adreno 722, from the renderer name ("Adreno (TM) 722"). */
+internal fun isAdreno722(renderer: String): Boolean = Regex("""adreno\D*722\b""", RegexOption.IGNORE_CASE).containsMatchIn(renderer)
 
 /** Meta Quest 3 or 3S: Oculus hardware with the Snapdragon XR2 Gen 2 (SXR2230P). */
 internal fun isMetaQuest3(manufacturer: String, model: String, socModel: String): Boolean =
@@ -1018,6 +1018,9 @@ internal fun prepareLaunch(
     screenSize: String,
     onStatus: (String) -> Unit,
 ): String {
+    // On an SD card set up as internal storage (/mnt/expand/<id>/...) the game's display socket path is too long for
+    // Linux, so the game would close as it opens its window (#70). Say so instead.
+    check(fitsSocketPath(xSocketPath(ImageFs.find(context).rootDir))) { context.getString(R.string.fw_adopted_storage_path_too_long) }
     installBundledComponents(context, onStatus)
 
     check(File(gameRoot, BUILD_INFO).exists()) { "Missing $BUILD_INFO in $gameRoot. Copy it from your WoW install." }
@@ -1029,9 +1032,14 @@ internal fun prepareLaunch(
     }
 
     val arm64Exe = File(gameRoot, "${product.flavorDir}/${product.armExe}")
-    BattleNetSignIn.load(context)?.let { login ->
-        BattleNetSignIn.writeLoginFile(gameRoot, product, login)
-        BattleNetSignIn.startLoginWatcher(gameRoot, product)
+    if (BattleNetBrowserLogin.enabled(context)) {
+        // Even an empty login.txt can select the password path instead of the launcher session.
+        BattleNetSignIn.removeLoginFile(gameRoot)
+    } else {
+        BattleNetSignIn.load(context)?.let { login ->
+            BattleNetSignIn.writeLoginFile(gameRoot, product, login)
+            BattleNetSignIn.startLoginWatcher(gameRoot, product)
+        }
     }
     if (!arm64Exe.exists()) {
         try {
@@ -1044,7 +1052,9 @@ internal fun prepareLaunch(
 
     onStatus("${gpu.label} 컨테이너 설정 중...")
     val containerManager = ContainerManager(context)
-    val config = containerConfig(gameRoot, product, gpu, screenSize)
+    val launchGpu = maliLaunchGpu(gpu) { app.gamenative.wow.GraphicsDrivers.applyTo(context, gpu) } // Mali hook
+    Timber.i("Graphics driver: ${launchGpu.driver}${if (launchGpu.driver != gpu.driver) " (picked in Settings)" else ""}")
+    val config = containerConfig(gameRoot, product, launchGpu, screenSize)
     val container = containerManager.getContainerById(CONTAINER_ID)
     if (container == null) {
         onStatus("실행 환경 만드는 중 (첫 실행)...")
@@ -1078,15 +1088,14 @@ internal fun prepareLaunch(
 }
 
 private fun containerConfig(gameRoot: File, product: WowProduct, gpu: GpuProfile, screenSize: String): JSONObject {
-    // The UBWC hint is a Turnip setting. On Mali the wrapper's OpConstantComposite patch breaks shader creation.
-    val samsungEnv = if (!gpu.isMali && Build.MANUFACTURER.equals("samsung", ignoreCase = true)) " FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1" else ""
-    val envVars = "WRAPPER_MAX_IMAGE_COUNT=0 ZINK_DESCRIPTORS=lazy ZINK_DEBUG=compact,deck_emu MESA_SHADER_CACHE_DISABLE=false MESA_SHADER_CACHE_MAX_SIZE=512MB mesa_glthread=true WINEESYNC=0 MESA_VK_WSI_PRESENT_MODE=mailbox${if (gpu.tuDebug.isNotEmpty()) " TU_DEBUG=${gpu.tuDebug}" else ""} VKD3D_SHADER_MODEL=6_0 PULSE_LATENCY_MSEC=144$samsungEnv${if (gpu.isMali) " WRAPPER_NO_PATCH_OPCONSTCOMP=1" else ""}"
+    val samsungEnv = if (Build.MANUFACTURER.equals("samsung", ignoreCase = true)) " FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1" else ""
+    val envVars = "WRAPPER_MAX_IMAGE_COUNT=0 ZINK_DESCRIPTORS=lazy ZINK_DEBUG=compact,deck_emu MESA_SHADER_CACHE_DISABLE=false MESA_SHADER_CACHE_MAX_SIZE=512MB mesa_glthread=true WINEESYNC=0 MESA_VK_WSI_PRESENT_MODE=mailbox${if (gpu.tuDebug.isNotEmpty()) " TU_DEBUG=${gpu.tuDebug}" else ""} VKD3D_SHADER_MODEL=6_0 PULSE_LATENCY_MSEC=144$samsungEnv"
     return JSONObject().apply {
         put("id", CONTAINER_ID)
         put("name", "WoW Forever")
         put("screenSize", screenSize)
-        put("envVars", envVars)
-        put("graphicsDriver", gpu.graphicsDriver)
+        put("envVars", maliEnvVars(gpu, envVars)) // Mali hook
+        put("graphicsDriver", gpu.graphicsDriver) // Mali hook
         put("graphicsDriverVersion", gpu.driver)
         put("graphicsDriverConfig", graphicsDriverConfig(gpu))
         put("displayRenderer", "vulkan")
@@ -1137,6 +1146,7 @@ internal fun gameTextLocale(locale: String) = if (locale.equals(BROKEN_TEXT_LOCA
 
 private const val BROKEN_TEXT_LOCALE = "itIT"
 private const val TEXT_LOCALE = "SET textLocale "
+private const val AUDIO_LOCALE = "SET audioLocale "
 
 /** The text language set in Config.wtf [lines], or null if there is none. */
 internal fun configTextLocale(lines: List<String>): String? = configValue(lines, TEXT_LOCALE)
@@ -1197,7 +1207,8 @@ private fun ensureGameConfig(root: File, product: WowProduct, screenSize: String
         installLocale(root, product),
         installPortal(root, product),
         forcePortal = GameRegions.chosen != null,
-        gameAccount = app.gamenative.wow.product.GameAccounts.chosen?.let(app.gamenative.wow.product.GameAccounts::name),
+        gameAccount = app.gamenative.wow.product.GameAccounts.chosen,
+        forceLocale = app.gamenative.wow.product.GameLanguages.chosen != null,
     ) ?: return
     configWtf.parentFile?.mkdirs()
     configWtf.writeText(updated.joinToString("\n") + "\n")
@@ -1220,6 +1231,7 @@ internal fun buildConfigWtf(
     portal: String = product.portal,
     forcePortal: Boolean = false,
     gameAccount: String? = null,
+    forceLocale: Boolean = false,
 ): List<String>? {
     if (existing == null) {
         val defaults = configDefaults(product, locale, portal) + RESOLUTION_KEYS.associateWith { "\"$screenSize\"" }
@@ -1231,6 +1243,9 @@ internal fun buildConfigWtf(
         existing.none { it.trim().startsWith("SET $WORK_OPTIMS_KEY ", ignoreCase = true) }
     val accountLine = gameAccount?.let { account -> accountListLine(existing.lastOrNull { it.startsWith(ACCOUNT_LIST, ignoreCase = true) }, account) }
     val staleAccount = accountLine != null && existing.none { it == accountLine }
+    // Without a pick the game's saved list goes, so it picks again: a saved list broke the next login with
+    // BLZ51914400, and clearing it (by editing the username) let the same login through (#62).
+    val savedAccountList = gameAccount == null && existing.any { it.startsWith(ACCOUNT_LIST, ignoreCase = true) }
     val staleResolutionKeys = RESOLUTION_KEYS.filter { key -> existing.none { it == "SET $key \"$screenSize\"" } }
     // A config carried over from another product (e.g. beta to launch) gets this product's portal and agent.
     // Once the player has picked a region ([forcePortal]) the portal follows it; before that a hand-edited one stays.
@@ -1244,13 +1259,19 @@ internal fun buildConfigWtf(
     val wrongAgent = existing.any { it.startsWith("SET agentUID ", ignoreCase = true) && it != agentLine }
     val missingNarrator = NARRATOR_KEYS.filter { key -> existing.none { it.startsWith("SET $key ", ignoreCase = true) } }
     val brokenText = configTextLocale(existing)?.equals(BROKEN_TEXT_LOCALE, ignoreCase = true) == true
-    if (existing.any { it == GX_API_LINE } && staleResolutionKeys.isEmpty() && !missingPortal && !wrongPortal && !wrongAgent && missingNarrator.isEmpty() && !staleAccount && !brokenText && !missingWorkOptims) return null
+    // Once a language is picked in Settings, the game's text and audio follow the install's language, which a repair
+    // moved to the pick (#63). Until then a language set in the game stays.
+    val textLine = "$TEXT_LOCALE\"${gameTextLocale(locale)}\""
+    val audioLine = "$AUDIO_LOCALE\"$locale\""
+    val wrongLocale = forceLocale && (existing.none { it.trim() == textLine } || existing.none { it.trim() == audioLine })
+    if (existing.any { it == GX_API_LINE } && staleResolutionKeys.isEmpty() && !missingPortal && !wrongPortal && !wrongAgent && missingNarrator.isEmpty() && !staleAccount && !savedAccountList && !brokenText && !wrongLocale && !missingWorkOptims) return null
     return existing.filterNot { line ->
         line.startsWith("SET gxApi ", ignoreCase = true) ||
             (wrongPortal && line.startsWith("SET portal ", ignoreCase = true)) ||
             (wrongAgent && line.startsWith("SET agentUID ", ignoreCase = true)) ||
-            (staleAccount && line.startsWith(ACCOUNT_LIST, ignoreCase = true)) ||
-            (brokenText && line.trim().startsWith(TEXT_LOCALE, ignoreCase = true)) ||
+            ((staleAccount || savedAccountList) && line.startsWith(ACCOUNT_LIST, ignoreCase = true)) ||
+            ((brokenText || wrongLocale) && line.trim().startsWith(TEXT_LOCALE, ignoreCase = true)) ||
+            (wrongLocale && line.trim().startsWith(AUDIO_LOCALE, ignoreCase = true)) ||
             staleResolutionKeys.any { line.startsWith("SET $it ", ignoreCase = true) }
     } + listOfNotNull(
         GX_API_LINE,
@@ -1258,12 +1279,14 @@ internal fun buildConfigWtf(
         newPortalLine.takeIf { wrongPortal },
         agentLine.takeIf { wrongAgent },
         accountLine.takeIf { staleAccount },
-        "$TEXT_LOCALE\"${gameTextLocale(BROKEN_TEXT_LOCALE)}\"".takeIf { brokenText },
+        "$TEXT_LOCALE\"${gameTextLocale(BROKEN_TEXT_LOCALE)}\"".takeIf { brokenText && !wrongLocale },
+        textLine.takeIf { wrongLocale },
+        audioLine.takeIf { wrongLocale },
         WORK_OPTIMS_LINE.takeIf { missingWorkOptims },
     ) + staleResolutionKeys.map { "SET $it \"$screenSize\"" } + missingNarrator.map { "SET $it \"0\"" }
 }
 
-private const val ACCOUNT_LIST = "SET accountList "
+private const val ACCOUNT_LIST = app.gamenative.wow.product.GameAccounts.ACCOUNT_LIST
 private const val DEAD_PORTAL_LINE = "SET portal \"TW\""
 
 /**
@@ -1271,8 +1294,7 @@ private const val DEAD_PORTAL_LINE = "SET portal \"TW\""
  * as the one to log into. The game's other accounts are kept, and [account] is added if the game hasn't seen it.
  */
 internal fun accountListLine(existing: String?, account: String): String {
-    val names = existing?.substringAfter('"', "")?.substringBeforeLast('"', "")
-        ?.split('|')?.map { it.trim().removePrefix("!") }?.filter { it.isNotEmpty() }.orEmpty()
+    val names = app.gamenative.wow.product.GameAccounts.namesInLine(existing)
     val all = if (names.any { it.equals(account, ignoreCase = true) }) names else names + account
     return ACCOUNT_LIST + "\"" + all.joinToString("") { (if (it.equals(account, ignoreCase = true)) "!" else "") + it + "|" } + "\""
 }

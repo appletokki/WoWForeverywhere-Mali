@@ -110,6 +110,9 @@ class LauncherController(
         private set
     var appUpdateProgress by mutableFloatStateOf(0f)
         private set
+
+    /** Why the last app update download failed, until the player retries or closes it. */
+    var appUpdateError by mutableStateOf<String?>(null)
     var downloadedApk by mutableStateOf<File?>(null)
         private set
     var needsInstallPermission by mutableStateOf(false)
@@ -243,6 +246,7 @@ class LauncherController(
     fun forgetLogin() {
         BattleNetSignIn.forget(context)
         BattleNetSignIn.removeLoginFile(File(gamePath))
+        app.gamenative.ui.screen.wow.auth.BattleNetBrowserLogin.signOut()
         hasSavedLogin = false
     }
 
@@ -361,6 +365,48 @@ class LauncherController(
         }
     }
 
+    /** The language the install has now, from its `.build.info`, for Settings to show (#63). */
+    fun installedLanguage(): String? = files.product?.let { installLocale(File(gamePath), it) }
+
+    /**
+     * Downloads the language picked in Settings with a repair, which also moves the install's language tag; the
+     * game's text and audio follow it at the next start (#63). Doesn't start the game.
+     */
+    fun downloadLanguage() {
+        val product = files.product ?: return
+        if (busy) return
+        if (!files.hasStorageAccess) {
+            needsStoragePermission = true
+            return
+        }
+        isUpdating = true
+        updateStatusText = context.getString(R.string.fw_connecting_blizzard)
+        errorMessage = null
+        scope.launch {
+            try {
+                val root = File(gamePath)
+                GameInstaller().run(InstallRequest(root, product, installLocale(root, product))) { p ->
+                    scope.launch(Dispatchers.Main) {
+                        updateStatusText = when (p.phase) {
+                            InstallProgress.Phase.DOWNLOADING -> p.fraction?.let { context.getString(R.string.fw_downloading_language_progress, (it * 100).toInt()) }
+                                ?: context.getString(R.string.fw_downloading_language)
+                            InstallProgress.Phase.RESOLVING -> context.getString(R.string.fw_connecting_blizzard)
+                            else -> context.getString(R.string.fw_finishing_update)
+                        }
+                    }
+                }
+                checkFiles()
+                isUpdating = false
+                checkVersionStatus()
+            } catch (e: Exception) {
+                Timber.e(e, "Error downloading the game language")
+                if (e.isPermissionDenied()) needsStoragePermission = true
+                errorMessage = context.getString(R.string.fw_update_failed, e.message)
+                isUpdating = false
+            }
+        }
+    }
+
     /** Adds the launch product to a beta install, reusing its Data/, then downloads the launch client. */
     fun convertToLaunch() {
         if (busy || files.product != WowProduct.BETA) return
@@ -411,7 +457,7 @@ class LauncherController(
         }
         isDownloadingAppUpdate = true
         appUpdateProgress = 0f
-        errorMessage = null
+        appUpdateError = null
         scope.launch {
             try {
                 val apk = AppUpdater.download(context, target) { appUpdateProgress = it }
@@ -420,7 +466,7 @@ class LauncherController(
                 installOrRequestPermission(apk)
             } catch (e: Exception) {
                 Timber.e(e, "Error downloading app update")
-                errorMessage = context.getString(R.string.fw_app_update_failed, e.message)
+                appUpdateError = e.message ?: context.getString(R.string.fw_unknown_error)
                 isDownloadingAppUpdate = false
             }
         }
@@ -517,6 +563,7 @@ class LauncherController(
     /** Settings, Share debug report: this launcher's state as "label: value" lines. */
     fun debugSummary(): List<String> = listOf(
         "GPU profile: ${gpu.edition}, driver ${gpu.driver}, ${gpu.screenSize}",
+        "Graphics driver: ${app.gamenative.wow.GraphicsDrivers.chosen(context) ?: "automatic"}",
         "GPU renderer: ${runCatching { com.winlator.core.GPUInformation.getRenderer(context) }.getOrNull() ?: "unknown"}",
         "Game version: ${version.displayName}" + if (version == GameVersion.FOREVER) ", ${foreverTrack.label}" else "",
         "Region: ${GameRegions.chosen?.label ?: "not chosen (default)"}",

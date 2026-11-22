@@ -38,6 +38,7 @@ class PluviaApp : Application() {
         app.gamenative.wow.product.GameVersions.load(this)
         app.gamenative.wow.product.ForeverTracks.load(this)
         app.gamenative.wow.product.GameRegions.load(this)
+        app.gamenative.wow.product.GameLanguages.load(this)
         app.gamenative.wow.product.GameAccounts.load(this)
         app.gamenative.wow.product.RenderSizes.load(this)
         app.gamenative.wow.FrameGeneration.init(this)
@@ -116,6 +117,7 @@ class PluviaApp : Application() {
             radialMenuCoordinator = null
             keepAlive = false
             clearActiveSuspendState()
+            GameSessionService.stop(instance)
         }
 
         fun clearActiveSuspendState() {

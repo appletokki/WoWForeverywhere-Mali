@@ -1,11 +1,14 @@
 name: Mali sync and release
 
-# Checks YoruDev-Ryland/WoWForeverywhere for a new release tag every day. When one appears, merges it
+# Checks YoruDev-Ryland/WoWForeverywhere for a new release tag every 6 hours. When one appears, merges it
 # into main (which carries the Mali support and the Korean launcher), builds the APK and publishes it
-# as release <tag>-mali. A merge conflict or a failed build opens an issue instead.
+# as release <tag>-mali. A merge conflict or a failed build opens one issue per tag instead.
+#
+# Keeping merges clean: Mali code lives in ui/screen/wow/MaliSupport.kt, and upstream files only carry
+# one-line hooks marked "// Mali hook". Resolve a conflict by keeping upstream's lines plus those hooks.
 on:
   schedule:
-    - cron: "23 21 * * *" # 06:23 KST
+    - cron: "23 */6 * * *" # every 6 hours (03:23, 09:23, 15:23, 21:23 KST)
   workflow_dispatch:
     inputs:
       force:
@@ -58,9 +61,13 @@ jobs:
           TAG=${{ steps.tag.outputs.tag }}
           if git merge-base --is-ancestor "$TAG" HEAD; then
             echo "main already contains $TAG"
-          else
-            git merge --no-edit -m "Merge upstream $TAG" "$TAG"
+          elif git merge --no-edit -m "Merge upstream $TAG" "$TAG"; then
             git push origin HEAD:main
+          else
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflicts.txt"
+            git merge --abort
+            echo "::error::Merge conflict with $TAG in: $(tr '\n' ' ' < "$RUNNER_TEMP/conflicts.txt")"
+            exit 1
           fi
 
       - uses: actions/setup-java@v4
@@ -122,6 +129,11 @@ jobs:
               echo "WoW Foreverywhere $TAG + Mali(MediaTek Dimensity) GPU 지원 + 한국어 런처."
               echo
               echo "공식 릴리스: https://github.com/YoruDev-Ryland/WoWForeverywhere/releases/tag/$TAG"
+              MISSING=$(python3 tools/mali_missing_ko.py)
+              if [ "$MISSING" != "0" ]; then
+                echo
+                echo "아직 한국어로 번역되지 않은 새 문구 ${MISSING}개는 영어로 표시됩니다."
+              fi
             } > dist/notes.md
             gh release create "$TAG-mali" --repo "$GITHUB_REPOSITORY" "$APK" --target main --title "$TAG Mali" --notes-file dist/notes.md --latest
           fi
@@ -137,5 +149,16 @@ jobs:
         run: |
           TAG=${{ steps.tag.outputs.tag }}
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "Mali 자동 빌드 실패: ${TAG:-unknown}" \
-            --body "업스트림 ${TAG:-?} 병합 또는 빌드가 실패했습니다. 병합 충돌이면 직접 해결해야 합니다. 실행 로그: $RUN_URL"
+          TITLE="Mali 자동 빌드 실패: ${TAG:-unknown}"
+          if [ -s "$RUNNER_TEMP/conflicts.txt" ]; then
+            BODY="업스트림 ${TAG:-?} 병합 중 충돌이 났습니다. 충돌 파일:"$'\n'"$(sed 's/^/- /' "$RUNNER_TEMP/conflicts.txt")"$'\n\n'"업스트림 줄을 살리고 '// Mali hook' 줄만 다시 넣으면 됩니다. 실행 로그: $RUN_URL"
+          else
+            BODY="업스트림 ${TAG:-?} 빌드 또는 배포가 실패했습니다. 실행 로그: $RUN_URL"
+          fi
+          # One open issue per tag: later runs comment on it instead of opening another.
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number --jq '.[0].number')
+          if [ -n "$OPEN" ]; then
+            gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+          fi

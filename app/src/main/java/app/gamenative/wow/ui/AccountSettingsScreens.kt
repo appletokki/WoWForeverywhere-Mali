@@ -1,5 +1,6 @@
 package app.gamenative.wow.ui
 
+import app.gamenative.ui.screen.wow.auth.BattleNetBrowserLogin
 import androidx.compose.ui.res.stringResource
 import app.gamenative.R
 import androidx.compose.foundation.background
@@ -13,8 +14,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -23,11 +26,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import app.gamenative.wow.addons.AddonMode
 import app.gamenative.wow.install.InstallController
 import app.gamenative.wow.install.InstallUiState
+import app.gamenative.wow.product.GameLanguage
+import app.gamenative.wow.product.GameLanguages
 import app.gamenative.wow.product.GameRegion
 import app.gamenative.wow.product.GameRegions
 import app.gamenative.wow.product.GameAccounts
@@ -46,8 +52,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.rememberCoroutineScope
 import app.gamenative.wow.FrameGeneration
+import app.gamenative.wow.GraphicsDrivers
 import app.gamenative.wow.debug.DebugLog
 import app.gamenative.wow.debug.DebugReport
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -101,7 +109,8 @@ fun AccountScreen(launcher: LauncherController, onBack: () -> Unit, onEditLogin:
                 if (launcher.hasSavedLogin) FwButton(stringResource(R.string.fw_forget_login), launcher::forgetLogin, kind = FwButtonKind.Danger)
             }
         }
-        GameAccountSection()
+        GameAccountSection(launcher)
+        BrowserLoginSection(launcher)
         BlockedLoginSection()
         FwSection(stringResource(R.string.fw_how_it_works)) {
             Text(
@@ -116,6 +125,46 @@ fun AccountScreen(launcher: LauncherController, onBack: () -> Unit, onEditLogin:
  * Account, Can't log in: Blizzard locks direct game logins from a network the account hasn't used (BLZ51914400,
  * after any CAPTCHA), and one sign-in on the web lifts it. BLZ51914500 is a password that didn't match.
  */
+/**
+ * How the game signs in: the saved email and password (the game's own login form), or Battle.net's sign-in page, which
+ * gets the game a launcher session like the Battle.net app does. Battle.net rejects the password login on devices it
+ * hasn't confirmed (BLZ51914400, upstream #57). Experimental and off by default.
+ */
+@Composable
+private fun BrowserLoginSection(launcher: LauncherController) {
+    val context = LocalContext.current
+    var browser by remember { mutableStateOf(BattleNetBrowserLogin.enabled(context)) }
+    FwSection(stringResource(R.string.fw_sign_in_method)) {
+        Text(stringResource(R.string.fw_sign_in_method_explanation), style = Fw.Secondary)
+        if (launcher.files.product != app.gamenative.wow.product.WowProduct.FOREVER) {
+            Text(stringResource(R.string.fw_browser_login_forever_only), style = Fw.Secondary.copy(color = Fw.Warn))
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(false to stringResource(R.string.fw_sign_in_saved_login), true to stringResource(R.string.fw_sign_in_browser)).forEach { (option, label) ->
+                FwRow(selected = browser == option, onClick = {
+                    BattleNetBrowserLogin.setEnabled(context, option)
+                    browser = option
+                }) {
+                    Text(label, style = Fw.Text, modifier = Modifier.weight(1f))
+                    if (browser == option) Text(stringResource(R.string.fw_selected), style = Fw.Data.copy(color = Fw.Brass))
+                }
+            }
+        }
+        if (browser) Text(stringResource(R.string.fw_browser_login_note), style = Fw.Secondary)
+        // The sign-in page never uses the saved password, but it stays stored until the player forgets it (upstream #97).
+        if (browser && launcher.hasSavedLogin) Text(stringResource(R.string.fw_browser_login_saved_password), style = Fw.Secondary)
+        // The page's cookies keep the last account signed in; signing out lets another account sign in next time.
+        if (browser) {
+            var signedOut by remember { mutableStateOf(false) }
+            FwButton(stringResource(R.string.fw_browser_login_sign_out), {
+                BattleNetBrowserLogin.signOut()
+                signedOut = true
+            }, kind = FwButtonKind.Ghost)
+            if (signedOut) Text(stringResource(R.string.fw_browser_login_signed_out), style = Fw.Secondary)
+        }
+    }
+}
+
 @Composable
 private fun BlockedLoginSection() {
     val context = LocalContext.current
@@ -151,21 +200,51 @@ private fun BlockedLoginSection() {
 
 /** Account, Game account: which WoW account to play when the Battle.net login has several. */
 @Composable
-private fun GameAccountSection() {
+private fun GameAccountSection(launcher: LauncherController) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val configWtf = launcher.files.product?.let { File(File(launcher.gamePath, it.flavorDir), "WTF/Config.wtf") }
     var current by remember { mutableStateOf(GameAccounts.chosen) }
-    fun pick(number: Int?) {
-        GameAccounts.save(context, number)
-        current = number
+    var typed by remember { mutableStateOf("") }
+    val known by produceState(emptyList<String>(), configWtf) {
+        value = withContext(Dispatchers.IO) { runCatching { GameAccounts.namesIn(configWtf!!.readLines()) }.getOrDefault(emptyList()) }
+    }
+    fun pick(name: String?) {
+        GameAccounts.save(context, name)
+        current = name
+        if (name == null && configWtf != null) {
+            // The app's last pick is still marked there, so the game would keep logging into it.
+            scope.launch(Dispatchers.IO) {
+                runCatching { if (configWtf.isFile) configWtf.writeText(GameAccounts.withoutAccountList(configWtf.readLines()).joinToString("\n") + "\n") }
+            }
+        }
     }
     FwSection(stringResource(R.string.fw_game_account)) {
         Text(
             stringResource(R.string.fw_game_account_explanation),
             style = Fw.Secondary,
         )
+        Text(stringResource(R.string.fw_game_account_type_it), style = Fw.Secondary)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FwChip(stringResource(R.string.fw_the_game_s_choice), current == null, { pick(null) })
-            GameAccounts.NUMBERS.forEach { n -> FwChip(GameAccounts.name(n), current == n, { pick(n) }) }
+            GameAccounts.suggestions(known, current).forEach { name ->
+                FwChip(name, current.equals(name, ignoreCase = true), { pick(name) })
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                typed,
+                { typed = it },
+                Modifier.weight(1f),
+                singleLine = true,
+                label = { Text(stringResource(R.string.fw_account_name)) },
+                textStyle = Fw.Text,
+            )
+            val name = GameAccounts.clean(typed)
+            FwButton(stringResource(R.string.fw_use), {
+                pick(name)
+                typed = ""
+            }, enabled = name != null)
         }
     }
 }
@@ -206,6 +285,7 @@ fun SettingsScreen(
         if (addonFolder == null) {
             GameVersionSection(launcher, onVersionChanged)
             RegionSection(launcher)
+            LanguageSection(launcher)
         }
         FwSection(stringResource(R.string.fw_support_foreverywhere)) {
             val context = LocalContext.current
@@ -224,6 +304,7 @@ fun SettingsScreen(
                 Text(stringResource(R.string.fw_gpu_profile, launcher.gpu.edition), style = Fw.Data)
             }
             ResolutionSection(launcher)
+            GraphicsDriverSection(launcher)
             FrameGenerationSection()
             TroubleshootingSection(launcher, onOpenControllerTest)
             AddonModeSection(null, onOpenAddonMode, onDisableAddonMode)
@@ -394,6 +475,77 @@ private fun ResolutionSection(launcher: LauncherController) {
     }
 }
 
+/** Settings, Graphics driver (#68): the device profile's driver, another built-in one, or an added adrenotools zip. */
+@Composable
+private fun GraphicsDriverSection(launcher: LauncherController) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var drivers by remember { mutableStateOf(GraphicsDrivers.list(context)) }
+    var current by remember { mutableStateOf(GraphicsDrivers.chosen(context)) }
+    var message by remember { mutableStateOf<String?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val (result, name) = withContext(Dispatchers.IO) {
+                runCatching { context.contentResolver.openInputStream(uri) }.getOrNull()
+                    ?.let { GraphicsDrivers.import(context, it) } ?: (GraphicsDrivers.ImportResult.FAILED to null)
+            }
+            message = when (result) {
+                GraphicsDrivers.ImportResult.OK -> null
+                GraphicsDrivers.ImportResult.NOT_A_DRIVER -> context.getString(R.string.fw_graphics_driver_invalid)
+                GraphicsDrivers.ImportResult.NAME_TAKEN -> context.getString(R.string.fw_graphics_driver_name_taken, name.orEmpty())
+                GraphicsDrivers.ImportResult.TOO_LARGE -> context.getString(R.string.fw_graphics_driver_too_large)
+                GraphicsDrivers.ImportResult.FAILED -> context.getString(R.string.fw_graphics_driver_read_failed)
+            }
+            drivers = GraphicsDrivers.list(context)
+            if (result == GraphicsDrivers.ImportResult.OK && name != null) {
+                GraphicsDrivers.choose(context, name)
+                current = name
+            }
+        }
+    }
+    FwSection(stringResource(R.string.fw_graphics_driver)) {
+        Text(stringResource(R.string.fw_graphics_driver_explanation), style = Fw.Secondary)
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            FwRow(selected = current == null, onClick = {
+                GraphicsDrivers.choose(context, null)
+                current = null
+            }) {
+                Text(stringResource(R.string.fw_automatic_for_this_device), style = Fw.Text, modifier = Modifier.weight(1f))
+                Text(launcher.gpu.driver, style = Fw.Data.copy(color = Fw.Ash))
+                if (current == null) Text(stringResource(R.string.fw_selected), style = Fw.Data.copy(color = Fw.Brass))
+            }
+            drivers.forEach { d ->
+                FwRow(selected = d.name == current, onClick = {
+                    GraphicsDrivers.choose(context, d.name)
+                    current = d.name
+                }) {
+                    Text(
+                        if (d.name == GraphicsDrivers.SYSTEM) stringResource(R.string.fw_graphics_driver_system) else d.name,
+                        style = Fw.Text,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (d.version.isNotEmpty()) Text(d.version, style = Fw.Data.copy(color = Fw.Ash))
+                    if (d.name == current) Text(stringResource(R.string.fw_selected), style = Fw.Data.copy(color = Fw.Brass))
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            FwButton(stringResource(R.string.fw_graphics_driver_add), { picker.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }, kind = FwButtonKind.Ghost)
+            drivers.firstOrNull { it.added && it.name == current }?.let { picked ->
+                FwButton(stringResource(R.string.fw_remove), {
+                    scope.launch {
+                        withContext(Dispatchers.IO) { GraphicsDrivers.remove(context, picked.name) }
+                        drivers = GraphicsDrivers.list(context)
+                        current = GraphicsDrivers.chosen(context)
+                    }
+                }, kind = FwButtonKind.Ghost)
+            }
+        }
+        message?.let { Text(it, style = Fw.Secondary.copy(color = Fw.Warn)) }
+    }
+}
+
 /** Settings, Region: the Battle.net region the game plays in, written as its portal at the next launch. */
 @Composable
 private fun RegionSection(launcher: LauncherController) {
@@ -423,6 +575,40 @@ private fun RegionSection(launcher: LauncherController) {
                 }
             }
         }
+    }
+}
+
+/**
+ * Settings, Game language: the language of the game's text and voices (#63). A pick the install doesn't have yet
+ * offers a download, a repair in that language; the game starts in it once that's done.
+ */
+@Composable
+private fun LanguageSection(launcher: LauncherController) {
+    val context = LocalContext.current
+    val installed = remember(launcher.gamePath, launcher.files.product, launcher.isUpdating) { launcher.installedLanguage() }
+    var current by remember(installed) { mutableStateOf(GameLanguages.chosen ?: GameLanguage.fromCode(installed)) }
+    val needsDownload = current != null && !current!!.code.equals(installed, ignoreCase = true)
+    FwSection(stringResource(R.string.fw_game_language)) {
+        Text(stringResource(R.string.fw_game_language_explanation), style = Fw.Secondary)
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            GameLanguage.entries.forEach { l ->
+                FwRow(selected = l == current, onClick = {
+                    if (launcher.isUpdating) return@FwRow
+                    GameLanguages.save(context, l)
+                    current = l
+                }) {
+                    Text(l.label, style = Fw.Text, modifier = Modifier.weight(1f))
+                    Text(l.code, style = Fw.Data.copy(color = Fw.Ash))
+                    if (l == current) Text(stringResource(R.string.fw_selected), style = Fw.Data.copy(color = Fw.Brass))
+                }
+            }
+        }
+        if (launcher.isUpdating) {
+            Text(launcher.updateStatusText, style = Fw.Secondary)
+        } else if (needsDownload) {
+            FwButton(stringResource(R.string.fw_download_language, current!!.label), { launcher.downloadLanguage() }, enabled = !launcher.busy)
+        }
+        launcher.errorMessage?.let { Text(it, style = Fw.Secondary.copy(color = Fw.Warn)) }
     }
 }
 
