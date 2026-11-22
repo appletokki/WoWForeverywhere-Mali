@@ -262,3 +262,9 @@ dependencies {
     testImplementation(libs.orgJson)
     testImplementation(libs.mockwebserver)
 }
+
+// Mali hook: a Mali-only rebuild of an upstream release gets a fourth version number (-PmaliPatch=1 makes 1.3.0 into
+// 1.3.0.1), so the in-app updater, which compares version names, offers it over the same upstream version.
+(findProperty("maliPatch") as String?)?.trim()?.takeIf { it.isNotEmpty() && it != "0" }?.let { patch ->
+    android.defaultConfig.versionName = "${android.defaultConfig.versionName}.$patch"
+}
