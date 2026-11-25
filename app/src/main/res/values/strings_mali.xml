@@ -16,4 +16,12 @@
     <string name="mali_low_latency_explanation">The game runs at most one frame ahead of the GPU (DXVK maxFrameLatency 1). Controls respond a frame sooner when the GPU is the limit, for about 1% fps.</string>
     <string name="mali_light_textures">Light texture conversion</string>
     <string name="mali_light_textures_explanation">Mali can\'t read the game\'s BC textures, so they are converted to ASTC. This uses 8×8 blocks instead of 4×4: less memory and faster loading, but blurrier textures.</string>
+    <string name="mali_curseforge">CurseForge search</string>
+    <string name="mali_curseforge_explanation">The official app\'s CurseForge connection doesn\'t serve this Mali build. With your own CurseForge API key, searching, installing and updating CurseForge addons works here too. The key is stored encrypted on this device and is only sent to CurseForge.</string>
+    <string name="mali_curseforge_get_key">Get a key from CurseForge</string>
+    <string name="mali_curseforge_key">API key</string>
+    <string name="mali_curseforge_saved">CurseForge is connected with your API key.</string>
+    <string name="mali_curseforge_rejected">CurseForge did not accept this key. Check that you copied all of it.</string>
+    <string name="mali_curseforge_unreachable">Couldn\'t check the key with CurseForge. Check your connection and try again.</string>
+    <string name="mali_curseforge_not_saved">The key works, but it couldn\'t be saved on this device.</string>
 </resources>

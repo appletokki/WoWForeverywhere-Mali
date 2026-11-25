@@ -299,6 +299,7 @@ fun SettingsScreen(
             ProviderLine(stringResource(R.string.fw_github_addon_catalog), true)
             Text(stringResource(R.string.fw_wago_needs_an_api_key_built_into), style = Fw.Secondary)
         }
+        MaliCurseForgeSection() // Mali hook
         if (addonFolder == null) {
             FwSection(stringResource(R.string.fw_device)) {
                 Text(stringResource(R.string.fw_gpu_profile, launcher.gpu.edition), style = Fw.Data)
