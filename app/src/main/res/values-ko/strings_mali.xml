@@ -16,4 +16,13 @@
     <string name="mali_low_latency_explanation">게임이 GPU보다 최대 한 프레임만 앞서 가게 합니다 (DXVK maxFrameLatency 1). GPU가 병목일 때 조작 반응이 한 프레임 빨라지고, FPS는 약 1% 줄어듭니다.</string>
     <string name="mali_light_textures">가벼운 텍스처 변환</string>
     <string name="mali_light_textures_explanation">Mali는 게임의 BC 텍스처를 읽지 못해 ASTC로 변환합니다. 4×4 대신 8×8 블록을 써서 메모리를 덜 쓰고 로딩이 빨라지지만, 텍스처가 흐려집니다.</string>
+    <string name="mali_curseforge">CurseForge 검색</string>
+    <string name="mali_curseforge_explanation">공식 앱의 CurseForge 연결은 Mali 빌드에서 쓸 수 없습니다. 본인의 CurseForge API 키를 넣으면 CurseForge 애드온 검색, 설치, 업데이트를 쓸 수 있습니다. 키는 이 기기에 암호화해 저장하고 CurseForge에만 보냅니다.</string>
+    <string name="mali_curseforge_get_key">CurseForge에서 키 받기</string>
+    <string name="mali_curseforge_key">API 키</string>
+    <string name="mali_curseforge_saved">API 키로 CurseForge에 연결했습니다.</string>
+    <string name="mali_curseforge_rejected">CurseForge가 이 키를 받아들이지 않았습니다. 키 전체를 복사했는지 확인하세요.</string>
+    <string name="mali_curseforge_unreachable">CurseForge에서 키를 확인하지 못했습니다. 연결 상태를 확인하고 다시 시도하세요.</string>
+    <string name="mali_curseforge_not_saved">키는 맞지만 이 기기에 저장하지 못했습니다.</string>
+    <string name="mali_curseforge_failed">CurseForge 검색 실패: %1$s</string>
 </resources>

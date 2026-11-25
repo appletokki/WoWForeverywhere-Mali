@@ -15,6 +15,8 @@ import app.gamenative.wow.addons.AddonManager
 import app.gamenative.wow.addons.addonTarget
 import app.gamenative.wow.addons.provider.CurseForgeProvider
 import app.gamenative.wow.addons.provider.GitHubProvider
+import app.gamenative.wow.addons.provider.MaliCurseForge
+import app.gamenative.wow.addons.provider.MaliCurseForgeProvider
 import app.gamenative.wow.addons.provider.WagoProvider
 import app.gamenative.wow.addons.provider.WowInterfaceProvider
 import app.gamenative.wow.product.GameVersion
@@ -64,17 +66,23 @@ class AddonsController(val addonsDir: File, val version: GameVersion, private va
     enum class Mode { INSTALLED, BROWSE }
 
     private val target = version.addonTarget()
+
+    // Mali hook: the player's own CurseForge key, when there is one (MaliCurseForge.kt).
+    private fun maliCurseForge(official: CurseForgeProvider) = MaliCurseForgeProvider({ MaliCurseForge.key(context) }, official) {
+        CurseForgeProvider(it, MaliCurseForge.http, MaliCurseForge.API_BASE, target = target)
+    }
+
     private val manager = AddonManager(
         addonsDir = addonsDir,
         db = AddonDb.forAddonsDir(addonsDir),
         providers = listOf(
-            CurseForgeProvider(
+            maliCurseForge(CurseForgeProvider( // Mali hook
                 BuildConfig.CURSEFORGE_API_KEY,
                 apiBase = BuildConfig.CURSEFORGE_API_BASE,
                 proxy = BuildConfig.CURSEFORGE_API_KEY.isBlank(),
                 target = target,
                 proxyToken = CurseForgeProvider.unscramble(BuildConfig.CURSEFORGE_PROXY_TOKEN_A, BuildConfig.CURSEFORGE_PROXY_TOKEN_B),
-            ),
+            )), // Mali hook
             WagoProvider(BuildConfig.WAGO_API_KEY, target = target),
             WowInterfaceProvider(target = target),
             GitHubProvider(target = target),
@@ -194,6 +202,9 @@ class AddonsController(val addonsDir: File, val version: GameVersion, private va
                     if (query.isBlank()) manager.popular(includeClassic, category) else manager.search(query, includeClassic, category)
                 }
                 show(found)
+                // Mali hook: say why when CurseForge was asked for and failed.
+                MaliCurseForge.lastProblem?.takeIf { source == "curseforge" && listings.isEmpty() }
+                    ?.let { message = context.getString(R.string.mali_curseforge_failed, it) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
