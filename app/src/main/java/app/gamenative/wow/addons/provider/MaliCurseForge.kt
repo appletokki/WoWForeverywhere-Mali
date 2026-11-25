@@ -6,6 +6,7 @@ import app.gamenative.Crypto
 import app.gamenative.utils.Net
 import app.gamenative.wow.addons.AddonCategory
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -29,6 +30,20 @@ object MaliCurseForge {
     val http: OkHttpClient by lazy { Net.http.newBuilder().followRedirects(false).build() }
 
     @Volatile private var cached: String? = null
+
+    /** Why the last CurseForge listing failed, or null when it worked. Never holds the key. */
+    @Volatile var lastProblem: String? = null
+        private set
+
+    internal suspend fun <T> noting(block: suspend () -> List<T>): List<T> = try {
+        block().also { lastProblem = null }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        lastProblem = "${e.javaClass.simpleName}: ${e.message.orEmpty().lineSequence().first().take(160)}"
+        Timber.w("CurseForge listing failed: $lastProblem")
+        throw e
+    }
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -90,9 +105,9 @@ internal class MaliCurseForgeProvider(
         return current?.takeIf { it.first == k }?.second ?: withKey(k).also { current = k to it }
     }
 
-    override suspend fun search(query: String, page: Int) = now().search(query, page)
-    override suspend fun popular(page: Int) = now().popular(page)
-    override suspend fun popular(page: Int, category: AddonCategory?) = now().popular(page, category)
+    override suspend fun search(query: String, page: Int) = MaliCurseForge.noting { now().search(query, page) }
+    override suspend fun popular(page: Int) = MaliCurseForge.noting { now().popular(page) }
+    override suspend fun popular(page: Int, category: AddonCategory?) = MaliCurseForge.noting { now().popular(page, category) }
     override suspend fun get(projectId: String) = now().get(projectId)
     override suspend fun getMany(ids: List<String>) = now().getMany(ids)
     override suspend fun description(projectId: String) = now().description(projectId)

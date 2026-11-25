@@ -24,4 +24,5 @@
     <string name="mali_curseforge_rejected">CurseForge가 이 키를 받아들이지 않았습니다. 키 전체를 복사했는지 확인하세요.</string>
     <string name="mali_curseforge_unreachable">CurseForge에서 키를 확인하지 못했습니다. 연결 상태를 확인하고 다시 시도하세요.</string>
     <string name="mali_curseforge_not_saved">키는 맞지만 이 기기에 저장하지 못했습니다.</string>
+    <string name="mali_curseforge_failed">CurseForge 검색 실패: %1$s</string>
 </resources>

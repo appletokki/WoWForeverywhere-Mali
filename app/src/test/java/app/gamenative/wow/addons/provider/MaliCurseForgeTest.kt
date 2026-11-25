@@ -5,6 +5,7 @@ import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -42,6 +43,26 @@ class MaliCurseForgeTest {
         key = "second-key"
         provider.search("questie", 0)
         assertEquals("second-key", server.takeRequest().headers["x-api-key"])
+    }
+
+    @Test
+    fun oneUnreadableMod_doesNotEmptyTheList() = runBlocking {
+        val page = JSONObject(Fixtures.load("cf-search.schema.json", "http://localhost"))
+        page.getJSONArray("data").put(JSONObject().put("name", "no id"))
+        server.dispatcher = Fixtures.dispatcher { Fixtures.json(page.toString()) }
+        server.start()
+        val found = CurseForgeProvider("key", OkHttpClient(), apiBase = server.base()).search("questie", 0)
+        assertEquals(listOf("334372", "4444"), found.map { it.projectId })
+    }
+
+    @Test
+    fun failedListing_notesWhy() = runBlocking {
+        server.dispatcher = Fixtures.dispatcher { MockResponse(code = 503) }
+        server.start()
+        val direct = CurseForgeProvider("key", OkHttpClient(), apiBase = server.base())
+        val provider = MaliCurseForgeProvider({ "" }, direct) { direct }
+        assertTrue(runCatching { provider.search("x", 0) }.isFailure)
+        assertEquals("IOException: HTTP 503 for /v1/mods/search", MaliCurseForge.lastProblem)
     }
 
     @Test

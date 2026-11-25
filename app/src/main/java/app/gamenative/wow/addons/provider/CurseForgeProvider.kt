@@ -8,8 +8,10 @@ import app.gamenative.wow.addons.AddonTarget
 import app.gamenative.wow.addons.ProviderIds
 import app.gamenative.wow.addons.SourceRef
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.putJsonArray
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -80,7 +82,7 @@ class CurseForgeProvider(
             .addQueryParameter("pageSize", PAGE_SIZE.toString())
             .build()
         val body = http.fetchText(url.toString(), headers) ?: return emptyList()
-        return ProviderJson.decodeFromString<CfList>(body).data.mapNotNull(::toRemote)
+        return mods(body).mapNotNull(::toRemote)
     }
 
     override suspend fun popular(page: Int): List<RemoteAddon> = search("", page)
@@ -96,7 +98,7 @@ class CurseForgeProvider(
         if (!enabled || numeric.isEmpty()) return emptyList()
         val request = buildJsonObject { putJsonArray("modIds") { numeric.forEach { add(JsonPrimitive(it)) } } }
         val body = http.fetchText("${apiBase.trimEnd('/')}/v1/mods", headers, postJson = request.toString()) ?: return emptyList()
-        return ProviderJson.decodeFromString<CfList>(body).data.mapNotNull { toRemote(it, keepEmpty = true) }
+        return mods(body).mapNotNull { toRemote(it, keepEmpty = true) }
     }
 
     /** Maps a mod; mods without a file for [target]'s versions are dropped unless [keepEmpty]. */
@@ -157,8 +159,18 @@ class CurseForgeProvider(
         )
     }
 
+    // Mali hook: one mod in an unexpected form is left out instead of failing the whole page.
+    private fun mods(body: String): List<CfMod> {
+        val items = ProviderJson.decodeFromString<CfList>(body).data
+        val read = items.map { runCatching { ProviderJson.decodeFromJsonElement<CfMod>(it) } }
+        val bad = read.mapNotNull { it.exceptionOrNull() }
+        if (bad.isNotEmpty()) timber.log.Timber.w("CurseForge: ${bad.size} of ${items.size} mods unreadable: ${bad.first().message?.take(200)}")
+        if (items.isNotEmpty() && bad.size == items.size) throw bad.first()
+        return read.mapNotNull { it.getOrNull() }
+    }
+
     @Serializable
-    private data class CfList(val data: List<CfMod> = emptyList())
+    private data class CfList(val data: List<JsonElement> = emptyList())
 
     @Serializable
     private data class CfSingle(val data: CfMod)

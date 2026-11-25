@@ -24,4 +24,5 @@
     <string name="mali_curseforge_rejected">CurseForge did not accept this key. Check that you copied all of it.</string>
     <string name="mali_curseforge_unreachable">Couldn\'t check the key with CurseForge. Check your connection and try again.</string>
     <string name="mali_curseforge_not_saved">The key works, but it couldn\'t be saved on this device.</string>
+    <string name="mali_curseforge_failed">CurseForge search failed: %1$s</string>
 </resources>

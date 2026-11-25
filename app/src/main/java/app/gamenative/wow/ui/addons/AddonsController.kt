@@ -202,6 +202,9 @@ class AddonsController(val addonsDir: File, val version: GameVersion, private va
                     if (query.isBlank()) manager.popular(includeClassic, category) else manager.search(query, includeClassic, category)
                 }
                 show(found)
+                // Mali hook: say why when CurseForge was asked for and failed.
+                MaliCurseForge.lastProblem?.takeIf { source == "curseforge" && listings.isEmpty() }
+                    ?.let { message = context.getString(R.string.mali_curseforge_failed, it) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
