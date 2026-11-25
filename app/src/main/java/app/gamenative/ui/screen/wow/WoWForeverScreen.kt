@@ -159,7 +159,7 @@ fun WoWForeverScreen(
                 installOrRequestPermission(apk)
             } catch (e: Exception) {
                 Timber.e(e, "Error downloading app update")
-                errorMessage = "앱 업데이트 다운로드 실패: ${e.message}"
+                errorMessage = "App update download failed: ${e.message}"
                 isDownloadingAppUpdate = false
             }
         }
@@ -205,17 +205,17 @@ fun WoWForeverScreen(
         }
         isLaunching = true
         errorMessage = null
-        statusText = "구성 요소 준비 중..."
+        statusText = "Preparing components..."
 
         launchJob = scope.launch {
             try {
                 val screenSize = fitScreenSizeToWindow(context, gpu.screenSize)
                 val containerId = withContext(Dispatchers.IO) {
-                    prepareLaunch(context, File(gamePath), product, gpu, screenSize) { msg ->
+                    prepareLaunch(context, File(gamePath), product, gpu, screenSize) { msg, _ ->
                         scope.launch(Dispatchers.Main) { statusText = msg }
                     }
                 }
-                statusText = "World of Warcraft 시작 중..."
+                statusText = "Booting into World of Warcraft..."
                 onLaunch(containerId)
             } catch (e: CancellationException) {
                 throw e
@@ -225,8 +225,8 @@ fun WoWForeverScreen(
                 denyStorageAccess()
             } catch (e: Exception) {
                 Timber.e(e, "Error launching WoW Forever")
-                errorMessage = e.message ?: "실행 실패"
-                statusText = "실행 실패"
+                errorMessage = e.message ?: "Launch failed"
+                statusText = "Launch failed"
                 isLaunching = false
             }
         }
@@ -297,12 +297,12 @@ fun WoWForeverScreen(
             return
         }
         isUpdating = true
-        updateStatusText = "Blizzard CDN에 연결 중..."
+        updateStatusText = "Connecting to Blizzard CDN..."
         errorMessage = null
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    WowClientDownloader.updateGame(File(gamePath), product, target) { msg ->
+                    WowClientDownloader.updateGame(context, File(gamePath), product, target) { msg, _ ->
                         scope.launch(Dispatchers.Main) { updateStatusText = msg }
                     }
                 }
@@ -313,7 +313,7 @@ fun WoWForeverScreen(
             } catch (e: Exception) {
                 Timber.e(e, "Error updating game")
                 if (e.isPermissionDenied()) denyStorageAccess()
-                errorMessage = "업데이트 실패: ${e.message}"
+                errorMessage = "Update failed: ${e.message}"
                 isUpdating = false
             }
         }
@@ -1018,8 +1018,9 @@ internal fun prepareLaunch(
     product: WowProduct,
     gpu: GpuProfile,
     screenSize: String,
-    onStatus: (String) -> Unit,
+    onProgress: (String, Float) -> Unit,
 ): String {
+    val onStatus: (String) -> Unit = { onProgress(it, -1f) }
     // On an SD card set up as internal storage (/mnt/expand/<id>/...) the game's display socket path is too long for
     // Linux, so the game would close as it opens its window (#70). Say so instead.
     check(fitsSocketPath(xSocketPath(ImageFs.find(context).rootDir))) { context.getString(R.string.fw_adopted_storage_path_too_long) }
@@ -1045,40 +1046,42 @@ internal fun prepareLaunch(
     }
     if (!arm64Exe.exists()) {
         try {
-            WowClientDownloader.download(gameRoot, product, onStatus)
+            WowClientDownloader.download(context, gameRoot, product, onProgress)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             if (!arm64Exe.exists()) throw IllegalStateException("Couldn't download ${product.armExe}: ${e.message}", e)
             Timber.w(e, "Client update check failed, launching the existing ${product.armExe}")
         }
     }
 
-    onStatus("${gpu.label} 컨테이너 설정 중...")
+    onStatus(context.getString(R.string.fw_configuring_container, gpu.label))
     val containerManager = ContainerManager(context)
     val launchGpu = maliLaunchGpu(context, gpu) { app.gamenative.wow.GraphicsDrivers.applyTo(context, gpu) } // Mali hook
     Timber.i("Graphics driver: ${launchGpu.driver}${if (launchGpu.driver != gpu.driver) " (picked in Settings)" else ""}")
     val config = containerConfig(gameRoot, product, launchGpu, screenSize)
     val container = containerManager.getContainerById(CONTAINER_ID)
     if (container == null) {
-        onStatus("실행 환경 만드는 중 (첫 실행)...")
+        onStatus(context.getString(R.string.fw_creating_prefix))
         containerManager.createContainer(CONTAINER_ID, config)
     } else {
         container.loadData(config)
         container.saveData()
     }
-    check(containerManager.hasContainer(CONTAINER_ID)) { "컨테이너를 만들지 못했습니다. 저장 공간과 로그를 확인하세요." }
+    check(containerManager.hasContainer(CONTAINER_ID)) { "Container creation failed. Check system storage and logs." }
     // Frame generation follows Settings; the in-game menu's own LSFG choices stay in the container.
     containerManager.getContainerById(CONTAINER_ID)?.apply {
         // A Lossless.dll without the shaders would make the frame-generation layer close the game, so it's left out.
         val frameGeneration = FrameGeneration.isArmed(context) && (FrameGeneration.hasShaders(context) || run {
             Timber.w("Frame generation skipped: Lossless.dll is missing its shaders")
             app.gamenative.ui.util.SnackbarManager.show(
-                "이번 실행에서는 프레임 생성이 꺼집니다: Lossless.dll에 필요한 셰이더가 없습니다. 설정에서 다른 파일을 고르세요.",
+                context.getString(R.string.fw_frame_generation_session_missing_shaders),
             )
             false
         }) && (!FrameGeneration.sitsOutAfterRebuildCrash(context, File(gameRoot, "${product.flavorDir}/Logs/gx.log")) || run {
             Timber.w("Frame generation skipped: the last start crashed while the game rebuilt its graphics device")
             app.gamenative.ui.util.SnackbarManager.show(
-                "Frame generation is off for this start: the game crashed last time while applying a graphics update. It's back on next time.",
+                context.getString(R.string.fw_frame_generation_after_crash),
             )
             false
         })
@@ -1324,8 +1327,8 @@ private fun installBundledComponents(context: Context, onStatus: (String) -> Uni
 
     val protonDir = File(ImageFs.getSharedProtonDir(context), PROTON_VERSION)
     if (!File(protonDir, "profile.json").exists() || !File(protonDir, "bin/wine").exists()) {
-        onStatus("Proton 11 ARM64EC 압축 해제 중 (약 10초)...")
-        check(extractBundledWcp(context, "$PROTON_VERSION.wcp", protonDir)) { "Proton 또는 그래픽 구성 요소를 풀지 못했습니다." }
+        onStatus(context.getString(R.string.fw_extracting_proton))
+        check(extractBundledWcp(context, "$PROTON_VERSION.wcp", protonDir)) { "Failed to extract Proton or graphics components." }
         File(protonDir, "bin").listFiles()?.forEach {
             it.setExecutable(true, false)
             it.setReadable(true, false)
@@ -1334,7 +1337,7 @@ private fun installBundledComponents(context: Context, onStatus: (String) -> Uni
 
     val dxvkDir = File(ContentsManager.getContentTypeDir(context, ContentProfile.ContentType.CONTENT_TYPE_DXVK), DXVK_VERSION)
     if (!File(dxvkDir, "profile.json").exists()) {
-        onStatus("DXVK ARM64 압축 해제 중...")
+        onStatus(context.getString(R.string.fw_extracting_dxvk))
         if (!extractBundledWcp(context, "dxvk-$DXVK_VERSION.wcp", dxvkDir)) Timber.e("Failed to extract DXVK")
     }
 
@@ -1345,7 +1348,7 @@ private fun installBundledComponents(context: Context, onStatus: (String) -> Uni
 private fun installDriver(context: Context, driverName: String, assetZip: String, onStatus: (String) -> Unit) {
     val driverDir = File(context.filesDir, "contents/adrenotools/$driverName")
     if (File(driverDir, "meta.json").exists()) return
-    onStatus("$driverName 드라이버 설치 중...")
+    onStatus(context.getString(R.string.fw_installing_driver, driverName))
     driverDir.mkdirs()
     if (!FileUtils.extractZipFromAssets(context, "bundled_components/$assetZip", driverDir)) {
         Timber.e("Error extracting driver $driverName from $assetZip")

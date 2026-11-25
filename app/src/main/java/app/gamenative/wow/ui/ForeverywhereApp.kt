@@ -5,6 +5,11 @@ import app.gamenative.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -52,10 +57,13 @@ object Routes {
 
 /** The app's own screens. Hosted by upstream's NavHost in place of `WoWForeverScreen`. */
 @Composable
-fun ForeverywhereApp(onLaunch: (appId: String) -> Unit) {
+fun ForeverywhereApp(
+    onPreparation: (String?, Float) -> Unit,
+    onLaunch: (appId: String) -> Unit,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val launcher = remember { LauncherController(context, scope, onLaunch) }
+    val launcher = remember { LauncherController(context, scope, onPreparation, onLaunch) }
     val nav = rememberNavController()
     var showLoginDialog by remember { mutableStateOf(false) }
     val addonsNow = remember(launcher.gamePath, launcher.files.product) { addonsControllerFor(launcher.gamePath, launcher.files.product, scope, context) }
@@ -104,7 +112,13 @@ fun ForeverywhereApp(onLaunch: (appId: String) -> Unit) {
     }
 
     ForeverywhereTheme {
-        Box(Modifier.fillMaxSize().background(Fw.Ground)) {
+        // The status bar is hidden and the theme draws into the camera cutout, so keep the launcher clear of
+        // both; a portrait phone's punch hole otherwise sits on the top row of buttons (#86). The game itself
+        // isn't in this NavHost and still uses the whole screen.
+        Box(
+            Modifier.fillMaxSize().background(Fw.Ground)
+                .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.systemBars)),
+        ) {
             NavHost(nav, startDestination = startRoute) {
                 composable(Routes.HOME) {
                     HomeScreen(
